@@ -19,22 +19,18 @@ For historic reasons, pip_repositories() is defined in //python:pip.bzl.
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", _http_archive = "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
-load("//python/pip_install:repositories.bzl", "pip_install_dependencies")
-load("//python/private:auth.bzl", "get_auth")
 load("//python/private:bzlmod_enabled.bzl", "BZLMOD_ENABLED")
 load("//python/private:coverage_deps.bzl", "coverage_dep")
-load("//python/private:full_version.bzl", "full_version")
-load("//python/private:internal_config_repo.bzl", "internal_config_repo")
 load(
     "//python/private:toolchains_repo.bzl",
     "multi_toolchain_aliases",
     "toolchain_aliases",
     "toolchains_repo",
 )
-load("//python/private:which.bzl", "which_with_fail")
 load(
     ":versions.bzl",
     "DEFAULT_RELEASE_BASE_URL",
+    "MINOR_MAPPING",
     "PLATFORMS",
     "TOOL_VERSIONS",
     "get_release_info",
@@ -49,10 +45,6 @@ def py_repositories():
     This function should be loaded and called in the user's WORKSPACE.
     With bzlmod enabled, this function is not needed since MODULE.bazel handles transitive deps.
     """
-    maybe(
-        internal_config_repo,
-        name = "rules_python_internal",
-    )
     http_archive(
         name = "bazel_skylib",
         sha256 = "74d544d96f4a5bb630d465ca8bbcfe231e3594e5aae57e1edbf17a6eb3ca2506",
@@ -61,7 +53,6 @@ def py_repositories():
             "https://github.com/bazelbuild/bazel-skylib/releases/download/1.3.0/bazel-skylib-1.3.0.tar.gz",
         ],
     )
-    pip_install_dependencies()
 
 ########
 # Remaining content of the file is only used to support toolchains.
@@ -69,26 +60,39 @@ def py_repositories():
 
 STANDALONE_INTERPRETER_FILENAME = "STANDALONE_INTERPRETER"
 
-def is_standalone_interpreter(rctx, python_interpreter_path):
+def get_interpreter_dirname(rctx, python_interpreter_target):
+    """Get a python interpreter target dirname.
+
+    Args:
+        rctx (repository_ctx): The repository rule's context object.
+        python_interpreter_target (Target): A target representing a python interpreter.
+
+    Returns:
+        str: The Python interpreter directory.
+    """
+
+    return rctx.path(Label("{}//:WORKSPACE".format(str(python_interpreter_target).split("//")[0]))).dirname
+
+def is_standalone_interpreter(rctx, python_interpreter_target):
     """Query a python interpreter target for whether or not it's a rules_rust provided toolchain
 
     Args:
         rctx (repository_ctx): The repository rule's context object.
-        python_interpreter_path (path): A path representing the interpreter.
+        python_interpreter_target (Target): A target representing a python interpreter.
 
     Returns:
         bool: Whether or not the target is from a rules_python generated toolchain.
     """
 
     # Only update the location when using a hermetic toolchain.
-    if not python_interpreter_path:
+    if not python_interpreter_target:
         return False
 
     # This is a rules_python provided toolchain.
     return rctx.execute([
         "ls",
         "{}/{}".format(
-            python_interpreter_path.dirname,
+            get_interpreter_dirname(rctx, python_interpreter_target),
             STANDALONE_INTERPRETER_FILENAME,
         ),
     ]).return_code == 0
@@ -104,14 +108,12 @@ def _python_repository_impl(rctx):
     python_short_version = python_version.rpartition(".")[0]
     release_filename = rctx.attr.release_filename
     urls = rctx.attr.urls or [rctx.attr.url]
-    auth = get_auth(rctx, urls)
 
     if release_filename.endswith(".zst"):
         rctx.download(
             url = urls,
             sha256 = rctx.attr.sha256,
             output = release_filename,
-            auth = auth,
         )
         unzstd = rctx.which("unzstd")
         if not unzstd:
@@ -119,12 +121,10 @@ def _python_repository_impl(rctx):
             rctx.download_and_extract(
                 url = url,
                 sha256 = rctx.attr.zstd_sha256,
-                auth = auth,
             )
             working_directory = "zstd-{version}".format(version = rctx.attr.zstd_version)
-
             make_result = rctx.execute(
-                [which_with_fail("make", rctx), "--jobs=4"],
+                ["make", "--jobs=4"],
                 timeout = 600,
                 quiet = True,
                 working_directory = working_directory,
@@ -140,7 +140,7 @@ def _python_repository_impl(rctx):
             rctx.symlink(zstd, unzstd)
 
         exec_result = rctx.execute([
-            which_with_fail("tar", rctx),
+            "tar",
             "--extract",
             "--strip-components=2",
             "--use-compress-program={unzstd}".format(unzstd = unzstd),
@@ -157,7 +157,6 @@ def _python_repository_impl(rctx):
             url = urls,
             sha256 = rctx.attr.sha256,
             stripPrefix = rctx.attr.strip_prefix,
-            auth = auth,
         )
 
     patches = rctx.attr.patches
@@ -180,16 +179,15 @@ def _python_repository_impl(rctx):
     if not rctx.attr.ignore_root_user_error:
         if "windows" not in rctx.os.name:
             lib_dir = "lib" if "windows" not in platform else "Lib"
-
-            exec_result = rctx.execute([which_with_fail("chmod", rctx), "-R", "ugo-w", lib_dir])
+            exec_result = rctx.execute(["chmod", "-R", "ugo-w", lib_dir])
             if exec_result.return_code != 0:
                 fail_msg = "Failed to make interpreter installation read-only. 'chmod' error msg: {}".format(
                     exec_result.stderr,
                 )
                 fail(fail_msg)
-            exec_result = rctx.execute([which_with_fail("touch", rctx), "{}/.test".format(lib_dir)])
+            exec_result = rctx.execute(["touch", "{}/.test".format(lib_dir)])
             if exec_result.return_code == 0:
-                exec_result = rctx.execute([which_with_fail("id", rctx), "-u"])
+                exec_result = rctx.execute(["id", "-u"])
                 if exec_result.return_code != 0:
                     fail("Could not determine current user ID. 'id -u' error msg: {}".format(
                         exec_result.stderr,
@@ -213,7 +211,6 @@ def _python_repository_impl(rctx):
         # tests for the standard libraries.
         "lib/python{python_version}/**/test/**".format(python_version = python_short_version),
         "lib/python{python_version}/**/tests/**".format(python_version = python_short_version),
-        "**/__pycache__/*.pyc.*",  # During pyc creation, temp files named *.pyc.NNN are created
     ]
 
     if rctx.attr.ignore_root_user_error:
@@ -223,6 +220,7 @@ def _python_repository_impl(rctx):
             # the definition of this filegroup will change, and depending rules will get invalidated."
             # See https://github.com/bazelbuild/rules_python/issues/1008 for unconditionally adding these to toolchains so we can stop ignoring them."
             "**/__pycache__/*.pyc",
+            "**/__pycache__/*.pyc.*",  # During pyc creation, temp files named *.pyc.NNN are created
             "**/__pycache__/*.pyo",
         ]
 
@@ -238,7 +236,6 @@ def _python_repository_impl(rctx):
             "libs/**",
             "Scripts/**",
             "share/**",
-            "tcl/**",
         ]
     else:
         glob_include += [
@@ -268,8 +265,7 @@ def _python_repository_impl(rctx):
     build_content = """\
 # Generated by python/repositories.bzl
 
-load("@rules_python//python:py_runtime.bzl", "py_runtime")
-load("@rules_python//python:py_runtime_pair.bzl", "py_runtime_pair")
+load("@bazel_tools//tools/python:toolchain.bzl", "py_runtime_pair")
 load("@rules_python//python/cc:py_cc_toolchain.bzl", "py_cc_toolchain")
 
 package(default_visibility = ["//visibility:public"])
@@ -362,13 +358,11 @@ py_cc_toolchain(
     rctx.file("BUILD.bazel", build_content)
 
     attrs = {
-        "auth_patterns": rctx.attr.auth_patterns,
         "coverage_tool": rctx.attr.coverage_tool,
         "distutils": rctx.attr.distutils,
         "distutils_content": rctx.attr.distutils_content,
         "ignore_root_user_error": rctx.attr.ignore_root_user_error,
         "name": rctx.attr.name,
-        "netrc": rctx.attr.netrc,
         "patches": rctx.attr.patches,
         "platform": platform,
         "python_version": python_version,
@@ -388,9 +382,6 @@ python_repository = repository_rule(
     _python_repository_impl,
     doc = "Fetches the external tools needed for the Python toolchain.",
     attrs = {
-        "auth_patterns": attr.string_dict(
-            doc = "Override mapping of hostnames to authorization patterns; mirrors the eponymous attribute from http_archive",
-        ),
         "coverage_tool": attr.string(
             # Mirrors the definition at
             # https://github.com/bazelbuild/bazel/blob/master/src/main/starlark/builtins_bzl/common/python/py_runtime_rule.bzl
@@ -430,9 +421,6 @@ For more information see the official bazel docs
             default = False,
             doc = "Whether the check for root should be ignored or not. This causes cache misses with .pyc files.",
             mandatory = False,
-        ),
-        "netrc": attr.string(
-            doc = ".netrc file to use for authentication; mirrors the eponymous attribute from http_archive",
         ),
         "patches": attr.label_list(
             doc = "A list of patch files to apply to the unpacked interpreter",
@@ -517,7 +505,8 @@ def python_register_toolchains(
 
     base_url = kwargs.pop("base_url", DEFAULT_RELEASE_BASE_URL)
 
-    python_version = full_version(python_version)
+    if python_version in MINOR_MAPPING:
+        python_version = MINOR_MAPPING[python_version]
 
     toolchain_repo_name = "{name}_toolchains".format(name = name)
 
@@ -536,13 +525,11 @@ def python_register_toolchains(
                 ))
             register_coverage_tool = False
 
-    loaded_platforms = []
     for platform in PLATFORMS.keys():
         sha256 = tool_versions[python_version]["sha256"].get(platform, None)
         if not sha256:
             continue
 
-        loaded_platforms.append(platform)
         (release_filename, urls, strip_prefix, patches) = get_release_info(platform, python_version, base_url, tool_versions)
 
         # allow passing in a tool version
@@ -584,16 +571,11 @@ def python_register_toolchains(
                 toolchain_repo_name = toolchain_repo_name,
                 platform = platform,
             ))
-            native.register_toolchains("@{toolchain_repo_name}//:{platform}_py_cc_toolchain".format(
-                toolchain_repo_name = toolchain_repo_name,
-                platform = platform,
-            ))
 
     toolchain_aliases(
         name = name,
         python_version = python_version,
         user_repository_name = name,
-        platforms = loaded_platforms,
     )
 
     # in bzlmod we write out our own toolchain repos

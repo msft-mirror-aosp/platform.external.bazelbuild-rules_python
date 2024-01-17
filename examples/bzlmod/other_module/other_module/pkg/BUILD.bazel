@@ -1,7 +1,4 @@
-load(
-    "@python_3_11//:defs.bzl",
-    py_binary_311 = "py_binary",
-)
+load("@python_3_11//:defs.bzl", py_binary_311 = "py_binary")
 load("@rules_python//python:defs.bzl", "py_library")
 
 py_library(
@@ -16,16 +13,11 @@ py_library(
 # used only when you need to support multiple versions of Python
 # in the same project.
 py_binary_311(
-    name = "bin",
-    srcs = ["bin.py"],
+    name = "lib_311",
+    srcs = ["lib.py"],
     data = ["data/data.txt"],
-    main = "bin.py",
     visibility = ["//visibility:public"],
-    deps = [
-        ":lib",
-        "@other_module_pip//absl_py",
-        "@rules_python//python/runfiles",
-    ],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 exports_files(["data/data.txt"])

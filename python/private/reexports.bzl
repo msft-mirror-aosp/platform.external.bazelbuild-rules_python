@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Internal re-exports of builtin symbols.
+"""Internal re-exports of built-in symbols.
 
-We want to use both the PyInfo defined by builtins and the one defined by
-rules_python. Because the builtin symbol is going away, the rules_python
-PyInfo symbol is given preference. Unfortunately, that masks the builtin,
-so we have to rebind it to another name and load it to make it available again.
+Currently the definitions here are re-exports of the native rules, "blessed" to
+work under `--incompatible_load_python_rules_from_bzl`. As the native rules get
+migrated to Starlark, their implementations will be removed from here.
 
-Unfortunately, we can't just write:
+We want to re-export a built-in symbol as if it were defined in a Starlark
+file, so that users can for instance do:
+
+```
+load("@rules_python//python:defs.bzl", "PyInfo")
+```
+
+Unfortunately, we can't just write in defs.bzl
 
 ```
 PyInfo = PyInfo
@@ -27,14 +33,15 @@ PyInfo = PyInfo
 
 because the declaration of module-level symbol `PyInfo` makes the builtin
 inaccessible. So instead we access the builtin here and export it under a
-different name. Then we can load it from elsewhere.
+different name. Then we can load it from defs.bzl and export it there under
+the original name.
 """
 
 # Don't use underscore prefix, since that would make the symbol local to this
 # file only. Use a non-conventional name to emphasize that this is not a public
 # symbol.
 # buildifier: disable=name-conventions
-BuiltinPyInfo = PyInfo
+internal_PyInfo = PyInfo
 
 # buildifier: disable=name-conventions
-BuiltinPyRuntimeInfo = PyRuntimeInfo
+internal_PyRuntimeInfo = PyRuntimeInfo

@@ -19,7 +19,8 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("//python/private:version_label.bzl", "version_label")
 
-# START: maintained by 'bazel run //tools/private:update_coverage_deps'
+# Update with './tools/update_coverage_deps.py <version>'
+#START: managed by update_coverage_deps.py script
 _coverage_deps = {
     "cp310": {
         "aarch64-apple-darwin": (
@@ -94,12 +95,12 @@ _coverage_deps = {
         ),
     },
 }
-# END: maintained by 'bazel run //tools/private:update_coverage_deps'
+#END: managed by update_coverage_deps.py script
 
 _coverage_patch = Label("//python/private:coverage.patch")
 
 def coverage_dep(name, python_version, platform, visibility):
-    """Register a single coverage dependency based on the python version and platform.
+    """Register a singe coverage dependency based on the python version and platform.
 
     Args:
         name: The name of the registered repository.

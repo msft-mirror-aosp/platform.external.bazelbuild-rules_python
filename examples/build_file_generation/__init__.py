@@ -14,7 +14,6 @@
 
 from flask import Flask, jsonify
 from random_number_generator import generate_random_number
-import sphinx  # noqa
 
 app = Flask(__name__)
 

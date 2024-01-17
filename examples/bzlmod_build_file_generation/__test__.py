@@ -19,7 +19,7 @@ from lib import main
 
 class ExampleTest(unittest.TestCase):
     def test_main(self):
-        self.assertEqual(
+        self.assertEquals(
             """\
 -  -
 A  1

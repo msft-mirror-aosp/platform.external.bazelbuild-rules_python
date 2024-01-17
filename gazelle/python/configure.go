@@ -59,6 +59,7 @@ func (py *Configurer) KnownDirectives() []string {
 		pythonconfig.IgnoreDependenciesDirective,
 		pythonconfig.ValidateImportStatementsDirective,
 		pythonconfig.GenerationMode,
+		pythonconfig.GenerationModePerFileIncludeInit,
 		pythonconfig.LibraryNamingConvention,
 		pythonconfig.BinaryNamingConvention,
 		pythonconfig.TestNamingConvention,
@@ -137,13 +138,24 @@ func (py *Configurer) Configure(c *config.Config, rel string, f *rule.File) {
 			switch pythonconfig.GenerationModeType(strings.TrimSpace(d.Value)) {
 			case pythonconfig.GenerationModePackage:
 				config.SetCoarseGrainedGeneration(false)
+				config.SetPerFileGeneration(false)
+			case pythonconfig.GenerationModeFile:
+				config.SetCoarseGrainedGeneration(false)
+				config.SetPerFileGeneration(true)
 			case pythonconfig.GenerationModeProject:
 				config.SetCoarseGrainedGeneration(true)
+				config.SetPerFileGeneration(false)
 			default:
 				err := fmt.Errorf("invalid value for directive %q: %s",
 					pythonconfig.GenerationMode, d.Value)
 				log.Fatal(err)
 			}
+		case pythonconfig.GenerationModePerFileIncludeInit:
+			v, err := strconv.ParseBool(strings.TrimSpace(d.Value))
+			if err != nil {
+				log.Fatal(err)
+			}
+			config.SetPerFileGenerationIncludeInit(v)
 		case pythonconfig.LibraryNamingConvention:
 			config.SetLibraryNamingConvention(strings.TrimSpace(d.Value))
 		case pythonconfig.BinaryNamingConvention:

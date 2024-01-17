@@ -50,10 +50,6 @@ const (
 	// GenerationMode represents the directive that controls the target generation
 	// mode. See below for the GenerationModeType constants.
 	GenerationMode = "python_generation_mode"
-	// GenerationModePerFileIncludeInit represents the directive that augments
-	// the "per_file" GenerationMode by including the package's __init__.py file.
-	// This is a boolean directive.
-	GenerationModePerFileIncludeInit = "python_generation_mode_per_file_include_init"
 	// LibraryNamingConvention represents the directive that controls the
 	// py_library naming convention. It interpolates $package_name$ with the
 	// Bazel package name. E.g. if the Bazel package name is `foo`, setting this
@@ -82,7 +78,6 @@ const (
 	// GenerationModeProject defines the mode in which a coarse-grained target will
 	// be generated englobing sub-directories containing Python files.
 	GenerationModeProject GenerationModeType = "project"
-	GenerationModeFile    GenerationModeType = "file"
 )
 
 const (
@@ -126,16 +121,14 @@ type Config struct {
 	pythonProjectRoot string
 	gazelleManifest   *manifest.Manifest
 
-	excludedPatterns             *singlylinkedlist.List
-	ignoreFiles                  map[string]struct{}
-	ignoreDependencies           map[string]struct{}
-	validateImportStatements     bool
-	coarseGrainedGeneration      bool
-	perFileGeneration            bool
-	perFileGenerationIncludeInit bool
-	libraryNamingConvention      string
-	binaryNamingConvention       string
-	testNamingConvention         string
+	excludedPatterns         *singlylinkedlist.List
+	ignoreFiles              map[string]struct{}
+	ignoreDependencies       map[string]struct{}
+	validateImportStatements bool
+	coarseGrainedGeneration  bool
+	libraryNamingConvention  string
+	binaryNamingConvention   string
+	testNamingConvention     string
 }
 
 // New creates a new Config.
@@ -144,19 +137,17 @@ func New(
 	pythonProjectRoot string,
 ) *Config {
 	return &Config{
-		extensionEnabled:             true,
-		repoRoot:                     repoRoot,
-		pythonProjectRoot:            pythonProjectRoot,
-		excludedPatterns:             singlylinkedlist.New(),
-		ignoreFiles:                  make(map[string]struct{}),
-		ignoreDependencies:           make(map[string]struct{}),
-		validateImportStatements:     true,
-		coarseGrainedGeneration:      false,
-		perFileGeneration:            false,
-		perFileGenerationIncludeInit: false,
-		libraryNamingConvention:      packageNameNamingConventionSubstitution,
-		binaryNamingConvention:       fmt.Sprintf("%s_bin", packageNameNamingConventionSubstitution),
-		testNamingConvention:         fmt.Sprintf("%s_test", packageNameNamingConventionSubstitution),
+		extensionEnabled:         true,
+		repoRoot:                 repoRoot,
+		pythonProjectRoot:        pythonProjectRoot,
+		excludedPatterns:         singlylinkedlist.New(),
+		ignoreFiles:              make(map[string]struct{}),
+		ignoreDependencies:       make(map[string]struct{}),
+		validateImportStatements: true,
+		coarseGrainedGeneration:  false,
+		libraryNamingConvention:  packageNameNamingConventionSubstitution,
+		binaryNamingConvention:   fmt.Sprintf("%s_bin", packageNameNamingConventionSubstitution),
+		testNamingConvention:     fmt.Sprintf("%s_test", packageNameNamingConventionSubstitution),
 	}
 }
 
@@ -169,20 +160,18 @@ func (c *Config) Parent() *Config {
 // current Config and sets itself as the parent to the child.
 func (c *Config) NewChild() *Config {
 	return &Config{
-		parent:                       c,
-		extensionEnabled:             c.extensionEnabled,
-		repoRoot:                     c.repoRoot,
-		pythonProjectRoot:            c.pythonProjectRoot,
-		excludedPatterns:             c.excludedPatterns,
-		ignoreFiles:                  make(map[string]struct{}),
-		ignoreDependencies:           make(map[string]struct{}),
-		validateImportStatements:     c.validateImportStatements,
-		coarseGrainedGeneration:      c.coarseGrainedGeneration,
-		perFileGeneration:            c.perFileGeneration,
-		perFileGenerationIncludeInit: c.perFileGenerationIncludeInit,
-		libraryNamingConvention:      c.libraryNamingConvention,
-		binaryNamingConvention:       c.binaryNamingConvention,
-		testNamingConvention:         c.testNamingConvention,
+		parent:                   c,
+		extensionEnabled:         c.extensionEnabled,
+		repoRoot:                 c.repoRoot,
+		pythonProjectRoot:        c.pythonProjectRoot,
+		excludedPatterns:         c.excludedPatterns,
+		ignoreFiles:              make(map[string]struct{}),
+		ignoreDependencies:       make(map[string]struct{}),
+		validateImportStatements: c.validateImportStatements,
+		coarseGrainedGeneration:  c.coarseGrainedGeneration,
+		libraryNamingConvention:  c.libraryNamingConvention,
+		binaryNamingConvention:   c.binaryNamingConvention,
+		testNamingConvention:     c.testNamingConvention,
 	}
 }
 
@@ -239,16 +228,15 @@ func (c *Config) FindThirdPartyDependency(modName string) (string, bool) {
 				}
 				sanitizedDistribution := SanitizeDistribution(distributionName)
 
-				if repo := gazelleManifest.PipRepository; repo != nil && (repo.UsePipRepositoryAliases != nil && *repo.UsePipRepositoryAliases == false) {
-					// TODO @aignas 2023-10-31: to be removed later.
-					// @<repository_name>_<distribution_name>//:pkg
-					distributionRepositoryName = distributionRepositoryName + "_" + sanitizedDistribution
-					lbl := label.New(distributionRepositoryName, "", "pkg")
+				if gazelleManifest.PipRepository != nil && gazelleManifest.PipRepository.UsePipRepositoryAliases {
+					// @<repository_name>//<distribution_name>
+					lbl := label.New(distributionRepositoryName, sanitizedDistribution, sanitizedDistribution)
 					return lbl.String(), true
 				}
 
-				// @<repository_name>//<distribution_name>
-				lbl := label.New(distributionRepositoryName, sanitizedDistribution, sanitizedDistribution)
+				// @<repository_name>_<distribution_name>//:pkg
+				distributionRepositoryName = distributionRepositoryName + "_" + sanitizedDistribution
+				lbl := label.New(distributionRepositoryName, "", "pkg")
 				return lbl.String(), true
 			}
 		}
@@ -337,30 +325,6 @@ func (c *Config) SetCoarseGrainedGeneration(coarseGrained bool) {
 // generated or not.
 func (c *Config) CoarseGrainedGeneration() bool {
 	return c.coarseGrainedGeneration
-}
-
-// SetPerFileGneration sets whether a separate py_library target should be
-// generated for each file.
-func (c *Config) SetPerFileGeneration(perFile bool) {
-	c.perFileGeneration = perFile
-}
-
-// PerFileGeneration returns whether a separate py_library target should be
-// generated for each file.
-func (c *Config) PerFileGeneration() bool {
-	return c.perFileGeneration
-}
-
-// SetPerFileGenerationIncludeInit sets whether py_library targets should
-// include __init__.py files when PerFileGeneration() is true.
-func (c *Config) SetPerFileGenerationIncludeInit(includeInit bool) {
-	c.perFileGenerationIncludeInit = includeInit
-}
-
-// PerFileGenerationIncludeInit returns whether py_library targets should
-// include __init__.py files when PerFileGeneration() is true.
-func (c *Config) PerFileGenerationIncludeInit() bool {
-	return c.perFileGenerationIncludeInit
 }
 
 // SetLibraryNamingConvention sets the py_library target naming convention.

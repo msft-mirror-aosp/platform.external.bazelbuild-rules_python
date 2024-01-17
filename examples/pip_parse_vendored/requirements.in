@@ -1,2 +1,1 @@
 requests
-certifi>=2023.7.22  # https://security.snyk.io/vuln/SNYK-PYTHON-CERTIFI-5805047

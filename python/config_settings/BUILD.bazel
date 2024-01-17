@@ -5,7 +5,6 @@ filegroup(
     name = "distribution",
     srcs = glob(["*.bzl"]) + [
         "BUILD.bazel",
-        "//python/config_settings/private:distribution",
     ],
     visibility = ["//python:__pkg__"],
 )

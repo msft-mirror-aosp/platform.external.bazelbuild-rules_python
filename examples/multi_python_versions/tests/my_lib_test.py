@@ -17,11 +17,8 @@ import sys
 
 import libs.my_lib as my_lib
 
-workspace_version = f"{sys.version_info.major}_{sys.version_info.minor}"
-bzlmod_version = f"{sys.version_info.major}{sys.version_info.minor}"
+sanitized_version_check = f"{sys.version_info.major}_{sys.version_info.minor}"
 
-if not my_lib.websockets_is_for_python_version(
-    workspace_version
-) and not my_lib.websockets_is_for_python_version(bzlmod_version):
+if not my_lib.websockets_is_for_python_version(sanitized_version_check):
     print("expected package for Python version is different than returned")
     sys.exit(1)

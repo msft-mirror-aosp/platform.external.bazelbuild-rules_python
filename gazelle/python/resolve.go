@@ -61,17 +61,11 @@ func (py *Resolver) Imports(c *config.Config, r *rule.Rule, f *rule.File) []reso
 	provides := make([]resolve.ImportSpec, 0, len(srcs)+1)
 	for _, src := range srcs {
 		ext := filepath.Ext(src)
-		if ext != ".py" {
-			continue
+		if ext == ".py" {
+			pythonProjectRoot := cfg.PythonProjectRoot()
+			provide := importSpecFromSrc(pythonProjectRoot, f.Pkg, src)
+			provides = append(provides, provide)
 		}
-		if cfg.PerFileGeneration() && len(srcs) > 1 && src == pyLibraryEntrypointFilename {
-			// Do not provide import spec from __init__.py when it is being included as
-			// part of another module.
-			continue
-		}
-		pythonProjectRoot := cfg.PythonProjectRoot()
-		provide := importSpecFromSrc(pythonProjectRoot, f.Pkg, src)
-		provides = append(provides, provide)
 	}
 	if len(provides) == 0 {
 		return nil
@@ -157,10 +151,10 @@ func (py *Resolver) Resolve(
 			for len(moduleParts) > 1 {
 				// Iterate back through the possible imports until
 				// a match is found.
-				// For example, "from foo.bar import baz" where baz is a module, we should try `foo.bar.baz` first, then
-				// `foo.bar`, then `foo`.
-				// In the first case, the import could be file `baz.py` in the directory `foo/bar`.
-				// Or, the import could be variable `baz` in file `foo/bar.py`.
+				// For example, "from foo.bar import baz" where bar is a variable, we should try
+				// `foo.bar.baz` first, then `foo.bar`, then `foo`. In the first case, the import could be file `baz.py`
+				// in the directory `foo/bar`.
+				// Or, the import could be variable `bar` in file `foo/bar.py`.
 				// The import could also be from a standard module, e.g. `six.moves`, where
 				// the dependency is actually `six`.
 				moduleParts = moduleParts[:len(moduleParts)-1]
@@ -178,7 +172,7 @@ func (py *Resolver) Resolve(
 						if override.Repo == from.Repo {
 							override.Repo = ""
 						}
-						dep := override.Rel(from.Repo, from.Pkg).String()
+						dep := override.String()
 						deps.Add(dep)
 						if explainDependency == dep {
 							log.Printf("Explaining dependency (%s): "+

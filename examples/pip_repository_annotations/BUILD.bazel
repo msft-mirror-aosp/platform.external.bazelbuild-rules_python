@@ -1,3 +1,4 @@
+load("@pip_installed//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_python//python:pip.bzl", "compile_pip_requirements")
 
@@ -9,20 +10,35 @@ exports_files(
 # This rule adds a convenient way to update the requirements file.
 compile_pip_requirements(
     name = "requirements",
-    src = "requirements.in",
+    extra_args = ["--allow-unsafe"],
 )
 
 py_test(
     name = "pip_parse_annotations_test",
     srcs = ["pip_repository_annotations_test.py"],
     env = {
-        "REQUESTS_PKG_DIR": "pip_requests",
-        "WHEEL_PKG_DIR": "pip_wheel",
+        "REQUESTS_PKG_DIR": "pip_parsed_requests",
+        "WHEEL_PKG_DIR": "pip_parsed_wheel",
     },
     main = "pip_repository_annotations_test.py",
     deps = [
-        "@pip_requests//:pkg",
-        "@pip_wheel//:pkg",
+        "@pip_parsed_requests//:pkg",
+        "@pip_parsed_wheel//:pkg",
+        "@rules_python//python/runfiles",
+    ],
+)
+
+py_test(
+    name = "pip_install_annotations_test",
+    srcs = ["pip_repository_annotations_test.py"],
+    env = {
+        "REQUESTS_PKG_DIR": "pip_installed_requests",
+        "WHEEL_PKG_DIR": "pip_installed_wheel",
+    },
+    main = "pip_repository_annotations_test.py",
+    deps = [
+        requirement("wheel"),
+        requirement("requests"),
         "@rules_python//python/runfiles",
     ],
 )

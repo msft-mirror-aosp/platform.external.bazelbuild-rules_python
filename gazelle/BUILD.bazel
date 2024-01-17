@@ -1,18 +1,10 @@
-load("@bazel_gazelle//:def.bzl", "DEFAULT_LANGUAGES", "gazelle", "gazelle_binary")
+load("@bazel_gazelle//:def.bzl", "gazelle")
 
 # Gazelle configuration options.
 # See https://github.com/bazelbuild/bazel-gazelle#running-gazelle-with-bazel
 # gazelle:prefix github.com/bazelbuild/rules_python/gazelle
 # gazelle:exclude bazel-out
-gazelle(
-    name = "gazelle",
-    gazelle = ":gazelle_binary",
-)
-
-gazelle_binary(
-    name = "gazelle_binary",
-    languages = DEFAULT_LANGUAGES + ["//python"],
-)
+gazelle(name = "gazelle")
 
 gazelle(
     name = "gazelle_update_repos",
@@ -28,7 +20,6 @@ filegroup(
     name = "distribution",
     srcs = [
         ":BUILD.bazel",
-        ":MODULE.bazel",
         ":README.md",
         ":WORKSPACE",
         ":def.bzl",

@@ -17,7 +17,6 @@ package python
 import (
 	"bufio"
 	"context"
-	_ "embed"
 	"fmt"
 	"io"
 	"log"
@@ -26,10 +25,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/bazelbuild/rules_go/go/tools/bazel"
 )
 
 var (
-	stdModulesCmd    *exec.Cmd
 	stdModulesStdin  io.WriteCloser
 	stdModulesStdout io.Reader
 	stdModulesMutex  sync.Mutex
@@ -39,40 +39,47 @@ var (
 func startStdModuleProcess(ctx context.Context) {
 	stdModulesSeen = make(map[string]struct{})
 
-	// due to #691, we need a system interpreter to boostrap, part of which is
-	// to locate the hermetic interpreter.
-	stdModulesCmd = exec.CommandContext(ctx, "python3", helperPath, "std_modules")
-	stdModulesCmd.Stderr = os.Stderr
-	// All userland site-packages should be ignored.
-	stdModulesCmd.Env = []string{"PYTHONNOUSERSITE=1"}
+	stdModulesScriptRunfile, err := bazel.Runfile("python/std_modules")
+	if err != nil {
+		log.Printf("failed to initialize std_modules: %v\n", err)
+		os.Exit(1)
+	}
 
-	stdin, err := stdModulesCmd.StdinPipe()
+	cmd := exec.CommandContext(ctx, stdModulesScriptRunfile)
+
+	cmd.Stderr = os.Stderr
+	// All userland site-packages should be ignored.
+	cmd.Env = []string{"PYTHONNOUSERSITE=1"}
+	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		log.Printf("failed to initialize std_modules: %v\n", err)
 		os.Exit(1)
 	}
 	stdModulesStdin = stdin
 
-	stdout, err := stdModulesCmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("failed to initialize std_modules: %v\n", err)
 		os.Exit(1)
 	}
 	stdModulesStdout = stdout
 
-	if err := stdModulesCmd.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
 		log.Printf("failed to initialize std_modules: %v\n", err)
 		os.Exit(1)
 	}
+
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("failed to wait for std_modules: %v\n", err)
+			os.Exit(1)
+		}
+	}()
 }
 
 func shutdownStdModuleProcess() {
 	if err := stdModulesStdin.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "error closing std module: %v", err)
-	}
-
-	if err := stdModulesCmd.Wait(); err != nil {
-		log.Printf("failed to wait for std_modules: %v\n", err)
 	}
 }
 

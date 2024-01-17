@@ -49,8 +49,7 @@ var pyKinds = map[string]rule.KindInfo{
 		},
 	},
 	pyLibraryKind: {
-		MatchAny:   false,
-		MatchAttrs: []string{"srcs"},
+		MatchAny: true,
 		NonEmptyAttrs: map[string]bool{
 			"deps":       true,
 			"srcs":       true,

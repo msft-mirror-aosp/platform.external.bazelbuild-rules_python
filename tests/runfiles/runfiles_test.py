@@ -1,3 +1,4 @@
+# pylint: disable=g-bad-file-header
 # Copyright 2018 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,20 +16,18 @@
 import os
 import tempfile
 import unittest
-from typing import Any, List, Optional
 
 from python.runfiles import runfiles
 
 
 class RunfilesTest(unittest.TestCase):
-    """Unit tests for `rules_python.python.runfiles.Runfiles`."""
+    # """Unit tests for `runfiles.Runfiles`."""
 
-    def testRlocationArgumentValidation(self) -> None:
+    def testRlocationArgumentValidation(self):
         r = runfiles.Create({"RUNFILES_DIR": "whatever"})
-        assert r is not None  # mypy doesn't understand the unittest api.
-        self.assertRaises(ValueError, lambda: r.Rlocation(None))  # type: ignore
+        self.assertRaises(ValueError, lambda: r.Rlocation(None))
         self.assertRaises(ValueError, lambda: r.Rlocation(""))
-        self.assertRaises(TypeError, lambda: r.Rlocation(1))  # type: ignore
+        self.assertRaises(TypeError, lambda: r.Rlocation(1))
         self.assertRaisesRegex(
             ValueError, "is not normalized", lambda: r.Rlocation("../foo")
         )
@@ -62,7 +61,7 @@ class RunfilesTest(unittest.TestCase):
             lambda: r.Rlocation("\\foo"),
         )
 
-    def testCreatesManifestBasedRunfiles(self) -> None:
+    def testCreatesManifestBasedRunfiles(self):
         with _MockFile(contents=["a/b c/d"]) as mf:
             r = runfiles.Create(
                 {
@@ -71,11 +70,10 @@ class RunfilesTest(unittest.TestCase):
                     "TEST_SRCDIR": "always ignored",
                 }
             )
-            assert r is not None  # mypy doesn't understand the unittest api.
             self.assertEqual(r.Rlocation("a/b"), "c/d")
             self.assertIsNone(r.Rlocation("foo"))
 
-    def testManifestBasedRunfilesEnvVars(self) -> None:
+    def testManifestBasedRunfilesEnvVars(self):
         with _MockFile(name="MANIFEST") as mf:
             r = runfiles.Create(
                 {
@@ -83,7 +81,6 @@ class RunfilesTest(unittest.TestCase):
                     "TEST_SRCDIR": "always ignored",
                 }
             )
-            assert r is not None  # mypy doesn't understand the unittest api.
             self.assertDictEqual(
                 r.EnvVars(),
                 {
@@ -100,7 +97,6 @@ class RunfilesTest(unittest.TestCase):
                     "TEST_SRCDIR": "always ignored",
                 }
             )
-            assert r is not None  # mypy doesn't understand the unittest api.
             self.assertDictEqual(
                 r.EnvVars(),
                 {
@@ -121,7 +117,6 @@ class RunfilesTest(unittest.TestCase):
                     "TEST_SRCDIR": "always ignored",
                 }
             )
-            assert r is not None  # mypy doesn't understand the unittest api.
             self.assertDictEqual(
                 r.EnvVars(),
                 {
@@ -131,25 +126,23 @@ class RunfilesTest(unittest.TestCase):
                 },
             )
 
-    def testCreatesDirectoryBasedRunfiles(self) -> None:
+    def testCreatesDirectoryBasedRunfiles(self):
         r = runfiles.Create(
             {
                 "RUNFILES_DIR": "runfiles/dir",
                 "TEST_SRCDIR": "always ignored",
             }
         )
-        assert r is not None  # mypy doesn't understand the unittest api.
         self.assertEqual(r.Rlocation("a/b"), "runfiles/dir/a/b")
         self.assertEqual(r.Rlocation("foo"), "runfiles/dir/foo")
 
-    def testDirectoryBasedRunfilesEnvVars(self) -> None:
+    def testDirectoryBasedRunfilesEnvVars(self):
         r = runfiles.Create(
             {
                 "RUNFILES_DIR": "runfiles/dir",
                 "TEST_SRCDIR": "always ignored",
             }
         )
-        assert r is not None  # mypy doesn't understand the unittest api.
         self.assertDictEqual(
             r.EnvVars(),
             {
@@ -158,13 +151,13 @@ class RunfilesTest(unittest.TestCase):
             },
         )
 
-    def testFailsToCreateManifestBasedBecauseManifestDoesNotExist(self) -> None:
+    def testFailsToCreateManifestBasedBecauseManifestDoesNotExist(self):
         def _Run():
             runfiles.Create({"RUNFILES_MANIFEST_FILE": "non-existing path"})
 
         self.assertRaisesRegex(IOError, "non-existing path", _Run)
 
-    def testFailsToCreateAnyRunfilesBecauseEnvvarsAreNotDefined(self) -> None:
+    def testFailsToCreateAnyRunfilesBecauseEnvvarsAreNotDefined(self):
         with _MockFile(contents=["a b"]) as mf:
             runfiles.Create(
                 {
@@ -182,7 +175,7 @@ class RunfilesTest(unittest.TestCase):
         self.assertIsNone(runfiles.Create({"TEST_SRCDIR": "always ignored"}))
         self.assertIsNone(runfiles.Create({"FOO": "bar"}))
 
-    def testManifestBasedRlocation(self) -> None:
+    def testManifestBasedRlocation(self):
         with _MockFile(
             contents=[
                 "Foo/runfile1",
@@ -212,7 +205,7 @@ class RunfilesTest(unittest.TestCase):
             else:
                 self.assertEqual(r.Rlocation("/foo"), "/foo")
 
-    def testManifestBasedRlocationWithRepoMappingFromMain(self) -> None:
+    def testManifestBasedRlocationWithRepoMappingFromMain(self):
         with _MockFile(
             contents=[
                 ",config.json,config.json~1.2.3",
@@ -287,7 +280,7 @@ class RunfilesTest(unittest.TestCase):
             self.assertIsNone(r.Rlocation("my_module", ""))
             self.assertIsNone(r.Rlocation("protobuf", ""))
 
-    def testManifestBasedRlocationWithRepoMappingFromOtherRepo(self) -> None:
+    def testManifestBasedRlocationWithRepoMappingFromOtherRepo(self):
         with _MockFile(
             contents=[
                 ",config.json,config.json~1.2.3",
@@ -369,7 +362,7 @@ class RunfilesTest(unittest.TestCase):
             self.assertIsNone(r.Rlocation("my_module", "protobuf~3.19.2"))
             self.assertIsNone(r.Rlocation("protobuf", "protobuf~3.19.2"))
 
-    def testDirectoryBasedRlocation(self) -> None:
+    def testDirectoryBasedRlocation(self):
         # The _DirectoryBased strategy simply joins the runfiles directory and the
         # runfile's path on a "/". This strategy does not perform any normalization,
         # nor does it check that the path exists.
@@ -381,7 +374,7 @@ class RunfilesTest(unittest.TestCase):
         else:
             self.assertEqual(r.Rlocation("/foo"), "/foo")
 
-    def testDirectoryBasedRlocationWithRepoMappingFromMain(self) -> None:
+    def testDirectoryBasedRlocationWithRepoMappingFromMain(self):
         with _MockFile(
             name="_repo_mapping",
             contents=[
@@ -448,7 +441,7 @@ class RunfilesTest(unittest.TestCase):
 
             self.assertEqual(r.Rlocation("config.json", ""), dir + "/config.json")
 
-    def testDirectoryBasedRlocationWithRepoMappingFromOtherRepo(self) -> None:
+    def testDirectoryBasedRlocationWithRepoMappingFromOtherRepo(self):
         with _MockFile(
             name="_repo_mapping",
             contents=[
@@ -520,49 +513,44 @@ class RunfilesTest(unittest.TestCase):
                 r.Rlocation("config.json", "protobuf~3.19.2"), dir + "/config.json"
             )
 
-    def testCurrentRepository(self) -> None:
-        # Under bzlmod, the current repository name is the empty string instead
-        # of the name in the workspace file.
-        if bool(int(os.environ["BZLMOD_ENABLED"])):
-            expected = ""
-        else:
-            expected = "rules_python"
-        r = runfiles.Create({"RUNFILES_DIR": "whatever"})
-        assert r is not None  # mypy doesn't understand the unittest api.
-        self.assertEqual(r.CurrentRepository(), expected)
+    def testCurrentRepository(self):
+        # This test assumes that it is running without --enable_bzlmod as the
+        # correct result with Bzlmod would be the empty string - the canonical
+        # name # of the main repository. Without Bzlmod, the main repository is
+        # treated just like any other repository and has the name of its
+        # runfiles directory returned, which coincides with the name specified
+        # in the WORKSPACE file.
+        #
+        # Specify a fake runfiles directory to verify that its value isn't used
+        # by the function.
+        self.assertEqual(
+            runfiles.Create({"RUNFILES_DIR": "whatever"}).CurrentRepository(),
+            "rules_python",
+        )
 
     @staticmethod
-    def IsWindows() -> bool:
+    def IsWindows():
         return os.name == "nt"
 
 
-class _MockFile:
-    def __init__(
-        self, name: Optional[str] = None, contents: Optional[List[Any]] = None
-    ) -> None:
+class _MockFile(object):
+    def __init__(self, name=None, contents=None):
         self._contents = contents or []
         self._name = name or "x"
-        self._path: Optional[str] = None
+        self._path = None
 
-    def __enter__(self) -> Any:
+    def __enter__(self):
         tmpdir = os.environ.get("TEST_TMPDIR")
         self._path = os.path.join(tempfile.mkdtemp(dir=tmpdir), self._name)
         with open(self._path, "wt") as f:
             f.writelines(l + "\n" for l in self._contents)
         return self
 
-    def __exit__(
-        self,
-        exc_type: Any,  # pylint: disable=unused-argument
-        exc_value: Any,  # pylint: disable=unused-argument
-        traceback: Any,  # pylint: disable=unused-argument
-    ) -> None:
-        if self._path:
-            os.remove(self._path)
-            os.rmdir(os.path.dirname(self._path))
+    def __exit__(self, exc_type, exc_value, traceback):
+        os.remove(self._path)
+        os.rmdir(os.path.dirname(self._path))
 
-    def Path(self) -> str:
-        assert self._path is not None
+    def Path(self):
         return self._path
 
 

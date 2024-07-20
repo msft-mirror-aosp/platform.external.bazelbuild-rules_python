@@ -14,7 +14,10 @@
 
 import argparse
 import json
-from typing import Any
+import pathlib
+from typing import Any, Dict, Set
+
+from python.pip_install.tools.wheel_installer import wheel
 
 
 def parser(**kwargs: Any) -> argparse.ArgumentParser:
@@ -39,6 +42,12 @@ def parser(**kwargs: Any) -> argparse.ArgumentParser:
         help="Extra arguments to pass down to pip.",
     )
     parser.add_argument(
+        "--platform",
+        action="extend",
+        type=wheel.Platform.from_string,
+        help="Platforms to target dependencies. Can be used multiple times.",
+    )
+    parser.add_argument(
         "--pip_data_exclude",
         action="store",
         help="Additional data exclusion parameters to add to the pip packages BUILD file.",
@@ -59,11 +68,17 @@ def parser(**kwargs: Any) -> argparse.ArgumentParser:
         help="Use 'pip download' instead of 'pip wheel'. Disables building wheels from source, but allows use of "
         "--platform, --python-version, --implementation, and --abi in --extra_pip_args.",
     )
+    parser.add_argument(
+        "--whl-file",
+        type=pathlib.Path,
+        help="Extract a whl file to be used within Bazel.",
+    )
     return parser
 
 
-def deserialize_structured_args(args):
+def deserialize_structured_args(args: Dict[str, str]) -> Dict:
     """Deserialize structured arguments passed from the starlark rules.
+
     Args:
         args: dict of parsed command line arguments
     """
@@ -74,3 +89,18 @@ def deserialize_structured_args(args):
         else:
             args[arg_name] = []
     return args
+
+
+def get_platforms(args: argparse.Namespace) -> Set:
+    """Aggregate platforms into a single set.
+
+    Args:
+        args: dict of parsed command line arguments
+    """
+    platforms = set()
+    if args.platform is None:
+        return platforms
+
+    platforms.update(args.platform)
+
+    return platforms

@@ -14,19 +14,16 @@
 
 """Build and/or fetch a single wheel based on the requirement passed in"""
 
-import argparse
 import errno
 import glob
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from pip._vendor.packaging.utils import canonicalize_name
 
@@ -108,6 +105,7 @@ def _extract_wheel(
     wheel_file: str,
     extras: Dict[str, Set[str]],
     enable_implicit_namespace_pkgs: bool,
+    platforms: List[wheel.Platform],
     installation_dir: Path = Path("."),
 ) -> None:
     """Extracts wheel into given directory and creates py_library and filegroup targets.
@@ -126,16 +124,15 @@ def _extract_wheel(
         _setup_namespace_pkg_compatibility(installation_dir)
 
     extras_requested = extras[whl.name] if whl.name in extras else set()
-    # Packages may create dependency cycles when specifying optional-dependencies / 'extras'.
-    # Example: github.com/google/etils/blob/a0b71032095db14acf6b33516bca6d885fe09e35/pyproject.toml#L32.
-    self_edge_dep = set([whl.name])
-    whl_deps = sorted(whl.dependencies(extras_requested) - self_edge_dep)
+
+    dependencies = whl.dependencies(extras_requested, platforms)
 
     with open(os.path.join(installation_dir, "metadata.json"), "w") as f:
         metadata = {
             "name": whl.name,
             "version": whl.version,
-            "deps": whl_deps,
+            "deps": dependencies.deps,
+            "deps_by_platform": dependencies.deps_select,
             "entry_points": [
                 {
                     "name": name,
@@ -154,6 +151,19 @@ def main() -> None:
     arguments.deserialize_structured_args(deserialized_args)
 
     _configure_reproducible_wheels()
+
+    if args.whl_file:
+        whl = Path(args.whl_file)
+
+        name, extras_for_pkg = _parse_requirement_for_extra(args.requirement)
+        extras = {name: extras_for_pkg} if extras_for_pkg and name else dict()
+        _extract_wheel(
+            wheel_file=whl,
+            extras=extras,
+            enable_implicit_namespace_pkgs=args.enable_implicit_namespace_pkgs,
+            platforms=arguments.get_platforms(args),
+        )
+        return
 
     pip_args = (
         [sys.executable, "-m", "pip"]
@@ -185,15 +195,10 @@ def main() -> None:
             if e.errno != errno.ENOENT:
                 raise
 
-    name, extras_for_pkg = _parse_requirement_for_extra(args.requirement)
-    extras = {name: extras_for_pkg} if extras_for_pkg and name else dict()
+    whl = Path(next(iter(glob.glob("*.whl"))))
 
-    whl = next(iter(glob.glob("*.whl")))
-    _extract_wheel(
-        wheel_file=whl,
-        extras=extras,
-        enable_implicit_namespace_pkgs=args.enable_implicit_namespace_pkgs,
-    )
+    with open("whl_file.json", "w") as f:
+        json.dump({"whl_file": f"{whl.resolve()}"}, f)
 
 
 if __name__ == "__main__":

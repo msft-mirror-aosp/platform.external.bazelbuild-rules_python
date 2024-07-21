@@ -7,7 +7,9 @@ Gazelle may be run by Bazel using the gazelle rule, or it may be installed and r
 
 This directory contains a plugin for
 [Gazelle](https://github.com/bazelbuild/bazel-gazelle)
-that generates BUILD files content for Python code.
+that generates BUILD files content for Python code. When Gazelle is run as a command line tool with this plugin, it embeds a Python interpreter resolved during the plugin build.
+The behavior of the plugin is slightly different with different version of the interpreter as the Python `stdlib` changes with every minor version release.
+Distributors of Gazelle binaries should, therefore, build a Gazelle binary for each OS+CPU architecture+Minor Python version combination they are targeting.
 
 The following instructions are for when you use [bzlmod](https://docs.bazel.build/versions/5.0.0/bzlmod.html).
 Please refer to older documentation that includes instructions on how to use Gazelle
@@ -64,9 +66,6 @@ pip = use_extension("@rules_python//python:extensions.bzl", "pip")
 # operating systems, we have requirements for each.
 pip.parse(
     name = "pip",
-    # When using gazelle you must use set the following flag
-    # in order for the generation of gazelle dependency resolution.
-    incompatible_generate_aliases = True,
     requirements_lock = "//:requirements_lock.txt",
     requirements_windows = "//:requirements_windows.txt",
 )
@@ -110,15 +109,12 @@ modules_mapping(
 gazelle_python_manifest(
     name = "gazelle_python_manifest",
     modules_mapping = ":modules_map",
-    # This is what we called our `pip_install` rule, where third-party
+    # This is what we called our `pip_parse` rule, where third-party
     # python libraries are loaded in BUILD files.
     pip_repository_name = "pip",
     # This should point to wherever we declare our python dependencies
     # (the same as what we passed to the modules_mapping rule in WORKSPACE)
     requirements = "//:requirements_lock.txt",
-    # NOTE: we can use this flag in order to make our setup compatible with
-    # bzlmod.
-    use_pip_repository_aliases = True,
 )
 ```
 
@@ -128,7 +124,6 @@ with the rules_python extension included. This typically goes in your root
 
 ```starlark
 load("@bazel_gazelle//:def.bzl", "gazelle")
-load("@rules_python_gazelle_plugin//:def.bzl", "GAZELLE_PYTHON_RUNTIME_DEPS")
 
 # Our gazelle target points to the python gazelle binary.
 # This is the simple case where we only need one language supported.
@@ -137,7 +132,6 @@ load("@rules_python_gazelle_plugin//:def.bzl", "GAZELLE_PYTHON_RUNTIME_DEPS")
 # See https://github.com/bazelbuild/bazel-gazelle/blob/master/extend.rst#example
 gazelle(
     name = "gazelle",
-    data = GAZELLE_PYTHON_RUNTIME_DEPS,
     gazelle = "@rules_python_gazelle_plugin//python:gazelle_binary",
 )
 ```
@@ -189,9 +183,11 @@ Python-specific directives are as follows:
 | `# gazelle:python_validate_import_statements`| `true` |
 | Controls whether the Python import statements should be validated. Can be "true" or "false" | |
 | `# gazelle:python_generation_mode`| `package` |
-| Controls the target generation mode. Can be "package" or "project" | |
+| Controls the target generation mode. Can be "file", "package", or "project" | |
+| `# gazelle:python_generation_mode_per_file_include_init`| `package` |
+| Controls whether `__init__.py` files are included as srcs in each generated target when target generation mode is "file". Can be "true", or "false" | |
 | `# gazelle:python_library_naming_convention`| `$package_name$` |
-| Controls the `py_library` naming convention. It interpolates $package_name$ with the Bazel package name. E.g. if the Bazel package name is `foo`, setting this to `$package_name$_my_lib` would result in a generated target named `foo_my_lib`. | |
+| Controls the `py_library` naming convention. It interpolates \$package_name\$ with the Bazel package name. E.g. if the Bazel package name is `foo`, setting this to `$package_name$_my_lib` would result in a generated target named `foo_my_lib`. | |
 | `# gazelle:python_binary_naming_convention` | `$package_name$_bin` |
 | Controls the `py_binary` naming convention. Follows the same interpolation rules as `python_library_naming_convention`. | |
 | `# gazelle:python_test_naming_convention` | `$package_name$_test` |
@@ -206,11 +202,15 @@ Python source files are those ending in `.py` but not ending in `_test.py`.
 First, we look for the nearest ancestor BUILD file starting from the folder
 containing the Python source file.
 
-If there is no `py_library` in this BUILD file, one is created, using the
-package name as the target's name. This makes it the default target in the
-package.
+In package generation mode, if there is no `py_library` in this BUILD file, one
+is created using the package name as the target's name. This makes it the
+default target in the package. Next, all source files are collected into the
+`srcs` of the `py_library`.
 
-Next, all source files are collected into the `srcs` of the `py_library`.
+In project generation mode, all source files in subdirectories (that don't have
+BUILD files) are also collected.
+
+In file generation mode, each file is given its own target.
 
 Finally, the `import` statements in the source files are parsed, and
 dependencies are added to the `deps` attribute.
@@ -220,7 +220,7 @@ dependencies are added to the `deps` attribute.
 A `py_test` target is added to the BUILD file when gazelle encounters
 a file named `__test__.py`.
 Often, Python unit test files are named with the suffix `_test`.
-For example, if we had a folder that is a package named "foo" we could have a Python file named `foo_test.py` 
+For example, if we had a folder that is a package named "foo" we could have a Python file named `foo_test.py`
 and gazelle would create a `py_test` block for the file.
 
 The following is an example of a `py_test` target that gazelle would add when
@@ -236,28 +236,35 @@ py_test(
 ```
 
 You can control the naming convention for test targets by adding a gazelle directive named
-`# gazelle:python_test_naming_convention`.  See the instructions in the section above that 
+`# gazelle:python_test_naming_convention`.  See the instructions in the section above that
 covers directives.
 
 ### Binaries
 
 When a `__main__.py` file is encountered, this indicates the entry point
-of a Python program.
+of a Python program. A `py_binary` target will be created, named `[package]_bin`.
 
-A `py_binary` target will be created, named `[package]_bin`.
+When no such entry point exists, Gazelle will look for a line like this in the top level in every module:
+
+```python
+if __name == "__main__":
+```
+
+Gazelle will create `py_binary` target will be created for every module with such line, with the target name
+being the same as module name.
 
 ## Developer Notes
 
-Gazelle extensions are written in Go. This gazelle plugin is a hybrid, as it uses Go to execute a 
-Python interpreter as a subprocess to parse Python source files. 
-See the gazelle documentation https://github.com/bazelbuild/bazel-gazelle/blob/master/extend.md 
+Gazelle extensions are written in Go. This gazelle plugin is a hybrid, as it uses Go to execute a
+Python interpreter as a subprocess to parse Python source files.
+See the gazelle documentation https://github.com/bazelbuild/bazel-gazelle/blob/master/extend.md
 for more information on extending Gazelle.
 
-If you add new Go dependencies to the plugin source code, you need to "tidy" the go.mod file. 
-After changing that file, run `go mod tidy` or `bazel run @go_sdk//:bin/go -- mod tidy` 
-to update the go.mod and go.sum files. Then run `bazel run //:update_go_deps` to have gazelle 
-add the new dependenies to the deps.bzl file. The deps.bzl file is used as defined in our /WORKSPACE 
+If you add new Go dependencies to the plugin source code, you need to "tidy" the go.mod file.
+After changing that file, run `go mod tidy` or `bazel run @go_sdk//:bin/go -- mod tidy`
+to update the go.mod and go.sum files. Then run `bazel run //:update_go_deps` to have gazelle
+add the new dependenies to the deps.bzl file. The deps.bzl file is used as defined in our /WORKSPACE
 to include the external repos Bazel loads Go dependencies from.
 
-Then after editing Go code, run `bazel run //:gazelle` to generate/update the rules in the 
+Then after editing Go code, run `bazel run //:gazelle` to generate/update the rules in the
 BUILD.bazel files in our repo.

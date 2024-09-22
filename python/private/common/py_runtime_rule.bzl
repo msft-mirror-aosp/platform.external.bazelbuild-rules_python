@@ -79,10 +79,22 @@ def _py_runtime_impl(ctx):
 
     python_version = ctx.attr.python_version
 
+    interpreter_version_info = ctx.attr.interpreter_version_info
+
     # TODO: Uncomment this after --incompatible_python_disable_py2 defaults to true
     # if ctx.fragments.py.disable_py2 and python_version == "PY2":
     #     fail("Using Python 2 is not supported and disabled; see " +
     #          "https://github.com/bazelbuild/bazel/issues/15684")
+
+    pyc_tag = ctx.attr.pyc_tag
+    if not pyc_tag and (ctx.attr.implementation_name and
+                        interpreter_version_info.get("major") and
+                        interpreter_version_info.get("minor")):
+        pyc_tag = "{}-{}{}".format(
+            ctx.attr.implementation_name,
+            interpreter_version_info["major"],
+            interpreter_version_info["minor"],
+        )
 
     py_runtime_info_kwargs = dict(
         interpreter_path = interpreter_path or None,
@@ -95,8 +107,19 @@ def _py_runtime_impl(ctx):
         bootstrap_template = ctx.file.bootstrap_template,
     )
     builtin_py_runtime_info_kwargs = dict(py_runtime_info_kwargs)
+
+    # There are all args that BuiltinPyRuntimeInfo doesn't support
+    py_runtime_info_kwargs.update(dict(
+        implementation_name = ctx.attr.implementation_name,
+        interpreter_version_info = interpreter_version_info,
+        pyc_tag = pyc_tag,
+        stage2_bootstrap_template = ctx.file.stage2_bootstrap_template,
+        zip_main_template = ctx.file.zip_main_template,
+    ))
+
     if not IS_BAZEL_7_OR_HIGHER:
         builtin_py_runtime_info_kwargs.pop("bootstrap_template")
+
     return [
         PyRuntimeInfo(**py_runtime_info_kwargs),
         # Return the builtin provider for better compatibility.
@@ -137,7 +160,7 @@ in-build runtime may or may not be hermetic, depending on whether it points to
 a checked-in interpreter or a wrapper script that accesses the system
 interpreter.
 
-# Example
+Example
 
 ```
 load("@rules_python//python:py_runtime.bzl", "py_runtime")
@@ -203,6 +226,9 @@ These files will be added to the runfiles of Python binaries that use this
 runtime. For a platform runtime this attribute must not be set.
 """,
         ),
+        "implementation_name": attr.string(
+            doc = "The Python implementation name (`sys.implementation.name`)",
+        ),
         "interpreter": attr.label(
             # We set `allow_files = True` to allow specifying executable
             # targets from rules that have more than one default output,
@@ -232,6 +258,27 @@ not be set.
 For a platform runtime, this is the absolute path of a Python interpreter on
 the target platform. For an in-build runtime this attribute must not be set.
 """),
+        "interpreter_version_info": attr.string_dict(
+            doc = """
+Version information about the interpreter this runtime provides. The
+supported keys match the names for `sys.version_info`. While the input
+values are strings, most are converted to ints. The supported keys are:
+  * major: int, the major version number
+  * minor: int, the minor version number
+  * micro: optional int, the micro version number
+  * releaselevel: optional str, the release level
+  * serial: optional int, the serial number of the release"
+            """,
+            mandatory = False,
+        ),
+        "pyc_tag": attr.string(
+            doc = """
+Optional string; the tag portion of a pyc filename, e.g. the `cpython-39` infix
+of `foo.cpython-39.pyc`. See PEP 3147. If not specified, it will be computed
+from `implementation_name` and `interpreter_version_info`. If no pyc_tag is
+available, then only source-less pyc generation will function correctly.
+""",
+        ),
         "python_version": attr.string(
             default = "PY3",
             values = ["PY2", "PY3"],
@@ -244,6 +291,17 @@ However, in the future this attribute will be mandatory and have no default
 value.
             """,
         ),
+        "stage2_bootstrap_template": attr.label(
+            default = "//python/private:stage2_bootstrap_template",
+            allow_single_file = True,
+            doc = """
+The template to use when two stage bootstrapping is enabled
+
+:::{seealso}
+{obj}`PyRuntimeInfo.stage2_bootstrap_template` and {obj}`--bootstrap_impl`
+:::
+""",
+        ),
         "stub_shebang": attr.string(
             default = DEFAULT_STUB_SHEBANG,
             doc = """
@@ -254,6 +312,19 @@ See https://github.com/bazelbuild/bazel/issues/8685 for
 motivation.
 
 Does not apply to Windows.
+""",
+        ),
+        "zip_main_template": attr.label(
+            default = "//python/private:zip_main_template",
+            allow_single_file = True,
+            doc = """
+The template to use for a zip's top-level `__main__.py` file.
+
+This becomes the entry point executed when `python foo.zip` is run.
+
+:::{seealso}
+The {obj}`PyRuntimeInfo.zip_main_template` field.
+:::
 """,
         ),
     }),

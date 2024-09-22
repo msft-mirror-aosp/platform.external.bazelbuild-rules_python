@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@dev_pip//:requirements.bzl", "requirement")
-load("//python:pip.bzl", "compile_pip_requirements")
+load("//python:py_binary.bzl", "py_binary")
 load("//python/private:bzlmod_enabled.bzl", "BZLMOD_ENABLED")  # buildifier: disable=bzl-visibility
 load("//python/private:util.bzl", "IS_BAZEL_7_OR_HIGHER")  # buildifier: disable=bzl-visibility
 load("//sphinxdocs:readthedocs.bzl", "readthedocs_install")
-load("//sphinxdocs:sphinx.bzl", "sphinx_build_binary", "sphinx_docs", "sphinx_inventory")
+load("//sphinxdocs:sphinx.bzl", "sphinx_build_binary", "sphinx_docs")
 load("//sphinxdocs:sphinx_stardoc.bzl", "sphinx_stardocs")
 
 # We only build for Linux and Mac because:
@@ -30,7 +31,7 @@ _TARGET_COMPATIBLE_WITH = select({
     "@platforms//os:linux": [],
     "@platforms//os:macos": [],
     "//conditions:default": ["@platforms//:incompatible"],
-})
+}) if IS_BAZEL_7_OR_HIGHER else ["@platforms//:incompatible"]
 
 # See README.md for instructions. Short version:
 # * `bazel run //docs/sphinx:docs.serve` in a separate terminal
@@ -38,7 +39,6 @@ _TARGET_COMPATIBLE_WITH = select({
 sphinx_docs(
     name = "docs",
     srcs = [
-        ":bazel_inventory",
         ":bzl_api_docs",
     ] + glob(
         include = [
@@ -60,6 +60,7 @@ sphinx_docs(
     renamed_srcs = {
         "//:CHANGELOG.md": "changelog.md",
         "//:CONTRIBUTING.md": "contributing.md",
+        "//sphinxdocs/inventories:bazel_inventory": "bazel_inventory.inv",
     },
     sphinx = ":sphinx-build",
     strip_prefix = package_name() + "/",
@@ -67,32 +68,41 @@ sphinx_docs(
     target_compatible_with = _TARGET_COMPATIBLE_WITH,
 )
 
-sphinx_inventory(
-    name = "bazel_inventory",
-    src = "bazel_inventory.txt",
-)
-
 sphinx_stardocs(
     name = "bzl_api_docs",
     docs = {
-        "api/cc/py_cc_toolchain.md": dict(
+        "api/python/cc/py_cc_toolchain.md": dict(
             dep = "//python/private:py_cc_toolchain_bzl",
             input = "//python/private:py_cc_toolchain_rule.bzl",
             public_load_path = "//python/cc:py_cc_toolchain.bzl",
         ),
-        "api/cc/py_cc_toolchain_info.md": "//python/cc:py_cc_toolchain_info_bzl",
-        "api/defs.md": "//python:defs_bzl",
-        "api/entry_points/py_console_script_binary.md": "//python/entry_points:py_console_script_binary_bzl",
-        "api/packaging.md": "//python:packaging_bzl",
-        "api/pip.md": "//python:pip_bzl",
+        "api/python/cc/py_cc_toolchain_info.md": "//python/cc:py_cc_toolchain_info_bzl",
+        "api/python/defs.md": "//python:defs_bzl",
+        "api/python/entry_points/py_console_script_binary.md": "//python/entry_points:py_console_script_binary_bzl",
+        "api/python/packaging.md": "//python:packaging_bzl",
+        "api/python/pip.md": "//python:pip_bzl",
+        "api/python/private/common/py_binary_rule_bazel.md": "//python/private/common:py_binary_rule_bazel_bzl",
+        "api/python/private/common/py_library_rule_bazel.md": "//python/private/common:py_library_rule_bazel_bzl",
+        "api/python/private/common/py_runtime_rule.md": "//python/private/common:py_runtime_rule_bzl",
+        "api/python/private/common/py_test_rule_bazel.md": "//python/private/common:py_test_rule_bazel_bzl",
+        "api/python/py_binary.md": "//python:py_binary_bzl",
+        "api/python/py_cc_link_params_info.md": "//python:py_cc_link_params_info_bzl",
+        "api/python/py_library.md": "//python:py_library_bzl",
+        "api/python/py_runtime.md": "//python:py_runtime_bzl",
+        "api/python/py_runtime_info.md": "//python:py_runtime_info_bzl",
+        "api/python/py_runtime_pair.md": dict(
+            dep = "//python/private:py_runtime_pair_rule_bzl",
+            input = "//python/private:py_runtime_pair_rule.bzl",
+            public_load_path = "//python:py_runtime_pair.bzl",
+        ),
+        "api/python/py_test.md": "//python:py_test_bzl",
     } | ({
         # Bazel 6 + Stardoc isn't able to parse something about the python bzlmod extension
-        "api/extensions/python.md": "//python/extensions:python_bzl",
+        "api/python/extensions/python.md": "//python/extensions:python_bzl",
     } if IS_BAZEL_7_OR_HIGHER else {}) | ({
         # This depends on @pythons_hub, which is only created under bzlmod,
-        "api/extensions/pip.md": "//python/extensions:pip_bzl",
+        "api/python/extensions/pip.md": "//python/extensions:pip_bzl",
     } if IS_BAZEL_7_OR_HIGHER and BZLMOD_ENABLED else {}),
-    footer = "_stardoc_footer.md",
     tags = ["docs"],
     target_compatible_with = _TARGET_COMPATIBLE_WITH,
 )
@@ -111,13 +121,74 @@ sphinx_build_binary(
         requirement("sphinx_rtd_theme"),
         requirement("myst_parser"),
         requirement("readthedocs_sphinx_ext"),
+        requirement("typing_extensions"),
+        "//sphinxdocs/src/sphinx_bzl",
     ],
 )
 
+_REQUIREMENTS_TARGET_COMPATIBLE_WITH = select({
+    "@platforms//os:linux": [],
+    "@platforms//os:macos": [],
+    "@platforms//os:windows": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+}) if BZLMOD_ENABLED else ["@platforms//:incompatible"]
+
 # Run bazel run //docs/sphinx:requirements.update
-compile_pip_requirements(
+genrule(
     name = "requirements",
-    src = "pyproject.toml",
-    requirements_txt = "requirements.txt",
-    target_compatible_with = _TARGET_COMPATIBLE_WITH,
+    srcs = ["pyproject.toml"],
+    outs = ["_requirements.txt"],
+    cmd = "$(UV_BIN) pip compile " + " ".join([
+        "--custom-compile-command='bazel run //docs/sphinx:requirements.update'",
+        "--generate-hashes",
+        "--universal",
+        "--emit-index-url",
+        "--no-strip-extras",
+        "--no-build",
+        "--python=$(PYTHON3)",
+        "$<",
+        "--output-file=$@",
+        # Always try upgrading
+        "--upgrade",
+    ]),
+    tags = [
+        "local",
+        "manual",
+        "no-cache",
+    ],
+    target_compatible_with = _REQUIREMENTS_TARGET_COMPATIBLE_WITH,
+    toolchains = [
+        "//python/uv:current_toolchain",
+        "//python:current_py_toolchain",
+    ],
+)
+
+# Write a script that can be used for updating the in-tree version of the
+# requirements file
+write_file(
+    name = "gen_update_requirements",
+    out = "requirements.update.py",
+    content = [
+        "from os import environ",
+        "from pathlib import Path",
+        "from sys import stderr",
+        "",
+        'src = Path(environ["REQUIREMENTS_FILE"])',
+        'dst = Path(environ["BUILD_WORKSPACE_DIRECTORY"]) / "docs" / "sphinx" / "requirements.txt"',
+        'print(f"Writing requirements contents from {src} to {dst}", file=stderr)',
+        "dst.write_text(src.read_text())",
+        'print("Success!", file=stderr)',
+    ],
+    target_compatible_with = _REQUIREMENTS_TARGET_COMPATIBLE_WITH,
+)
+
+py_binary(
+    name = "requirements.update",
+    srcs = ["requirements.update.py"],
+    data = [":requirements"],
+    env = {
+        "REQUIREMENTS_FILE": "$(location :requirements)",
+    },
+    tags = ["manual"],
+    target_compatible_with = _REQUIREMENTS_TARGET_COMPATIBLE_WITH,
 )

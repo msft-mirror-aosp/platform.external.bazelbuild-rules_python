@@ -81,7 +81,7 @@ dev_python = use_extension(
     "python",
     dev_dependency = True,
 )
-dev_python.rules_python_private_testing(
+dev_python.override(
     register_all_versions = True,
 )
 
@@ -93,7 +93,7 @@ dev_pip = use_extension(
 dev_pip.parse(
     hub_name = "dev_pip",
     python_version = "3.11",
-    requirements_lock = "//docs/sphinx:requirements.txt",
+    requirements_lock = "//docs:requirements.txt",
 )
 dev_pip.parse(
     hub_name = "pypiserver",
@@ -116,6 +116,7 @@ bazel_binaries.local(
     path = "tests/integration/bazel_from_env",
 )
 bazel_binaries.download(version = "6.4.0")
+bazel_binaries.download(version = "7.3.1")
 bazel_binaries.download(version = "rolling")
 use_repo(
     bazel_binaries,
@@ -124,6 +125,7 @@ use_repo(
     # that should be use_repo()'d, so we add them as requested
     "bazel_binaries_bazelisk",
     "build_bazel_bazel_6_4_0",
+    "build_bazel_bazel_7_3_1",
     "build_bazel_bazel_rolling",
     "build_bazel_bazel_self",
 )

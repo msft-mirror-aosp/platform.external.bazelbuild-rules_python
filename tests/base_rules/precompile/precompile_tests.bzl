@@ -23,18 +23,24 @@ load("//python:py_binary.bzl", "py_binary")
 load("//python:py_info.bzl", "PyInfo")
 load("//python:py_library.bzl", "py_library")
 load("//python:py_test.bzl", "py_test")
-load("//tests/base_rules:py_info_subject.bzl", "py_info_subject")
+load("//tests/support:py_info_subject.bzl", "py_info_subject")
 load(
     "//tests/support:support.bzl",
     "CC_TOOLCHAIN",
     "EXEC_TOOLS_TOOLCHAIN",
-    "PLATFORM_TOOLCHAIN",
     "PRECOMPILE",
     "PRECOMPILE_ADD_TO_RUNFILES",
     "PRECOMPILE_SOURCE_RETENTION",
+    "PY_TOOLCHAINS",
 )
 
-_TEST_TOOLCHAINS = [PLATFORM_TOOLCHAIN, CC_TOOLCHAIN]
+_COMMON_CONFIG_SETTINGS = {
+    # This isn't enabled in all environments the tests run in, so disable
+    # it for conformity.
+    "//command_line_option:allow_unresolved_symlinks": True,
+    "//command_line_option:extra_toolchains": [PY_TOOLCHAINS, CC_TOOLCHAIN],
+    EXEC_TOOLS_TOOLCHAIN: "enabled",
+}
 
 _tests = []
 
@@ -60,10 +66,7 @@ def _test_precompile_enabled_setup(name, py_rule, **kwargs):
         name = name,
         impl = _test_precompile_enabled_impl,
         target = name + "_subject",
-        config_settings = {
-            "//command_line_option:extra_toolchains": _TEST_TOOLCHAINS,
-            EXEC_TOOLS_TOOLCHAIN: "enabled",
-        },
+        config_settings = _COMMON_CONFIG_SETTINGS,
     )
 
 def _test_precompile_enabled_impl(env, target):
@@ -118,10 +121,8 @@ def _test_pyc_only(name):
     analysis_test(
         name = name,
         impl = _test_pyc_only_impl,
-        config_settings = {
-            "//command_line_option:extra_toolchains": _TEST_TOOLCHAINS,
+        config_settings = _COMMON_CONFIG_SETTINGS | {
             ##PRECOMPILE_SOURCE_RETENTION: "omit_source",
-            EXEC_TOOLS_TOOLCHAIN: "enabled",
             PRECOMPILE: "enabled",
         },
         target = name + "_subject",
@@ -163,10 +164,7 @@ def _test_precompile_if_generated(name):
         name = name,
         impl = _test_precompile_if_generated_impl,
         target = name + "_subject",
-        config_settings = {
-            "//command_line_option:extra_toolchains": _TEST_TOOLCHAINS,
-            EXEC_TOOLS_TOOLCHAIN: "enabled",
-        },
+        config_settings = _COMMON_CONFIG_SETTINGS,
     )
 
 _tests.append(_test_precompile_if_generated)
@@ -205,10 +203,8 @@ def _test_omit_source_if_generated_source(name):
         name = name,
         impl = _test_omit_source_if_generated_source_impl,
         target = name + "_subject",
-        config_settings = {
-            "//command_line_option:extra_toolchains": _TEST_TOOLCHAINS,
+        config_settings = _COMMON_CONFIG_SETTINGS | {
             PRECOMPILE_SOURCE_RETENTION: "omit_if_generated_source",
-            EXEC_TOOLS_TOOLCHAIN: "enabled",
         },
     )
 
@@ -254,11 +250,9 @@ def _test_precompile_add_to_runfiles_decided_elsewhere(name):
             "binary": name + "_binary",
             "library": name + "_lib",
         },
-        config_settings = {
-            "//command_line_option:extra_toolchains": _TEST_TOOLCHAINS,
+        config_settings = _COMMON_CONFIG_SETTINGS | {
             PRECOMPILE_ADD_TO_RUNFILES: "decided_elsewhere",
             PRECOMPILE: "enabled",
-            EXEC_TOOLS_TOOLCHAIN: "enabled",
         },
     )
 
@@ -266,14 +260,14 @@ _tests.append(_test_precompile_add_to_runfiles_decided_elsewhere)
 
 def _test_precompile_add_to_runfiles_decided_elsewhere_impl(env, targets):
     env.expect.that_target(targets.binary).runfiles().contains_at_least([
-        "{workspace}/tests/base_rules/precompile/__pycache__/bin.fakepy-45.pyc",
-        "{workspace}/tests/base_rules/precompile/__pycache__/lib.fakepy-45.pyc",
-        "{workspace}/tests/base_rules/precompile/bin.py",
-        "{workspace}/tests/base_rules/precompile/lib.py",
+        "{workspace}/{package}/__pycache__/bin.fakepy-45.pyc",
+        "{workspace}/{package}/__pycache__/lib.fakepy-45.pyc",
+        "{workspace}/{package}/bin.py",
+        "{workspace}/{package}/lib.py",
     ])
 
     env.expect.that_target(targets.library).runfiles().contains_exactly([
-        "{workspace}/tests/base_rules/precompile/lib.py",
+        "{workspace}/{package}/lib.py",
     ])
 
 def _test_precompiler_action(name):
@@ -293,16 +287,12 @@ def _test_precompiler_action(name):
         name = name,
         impl = _test_precompiler_action_impl,
         target = name + "_subject",
-        config_settings = {
-            "//command_line_option:extra_toolchains": _TEST_TOOLCHAINS,
-            EXEC_TOOLS_TOOLCHAIN: "enabled",
-        },
+        config_settings = _COMMON_CONFIG_SETTINGS,
     )
 
 _tests.append(_test_precompiler_action)
 
 def _test_precompiler_action_impl(env, target):
-    #env.expect.that_target(target).runfiles().contains_exactly([])
     action = env.expect.that_target(target).action_named("PyCompile")
     action.contains_flag_values([
         ("--optimize", "2"),

@@ -16,7 +16,7 @@
 
 load("//python/private:auth.bzl", "AUTH_ATTRS", "get_auth")
 load("//python/private:envsubst.bzl", "envsubst")
-load("//python/private:python_repositories.bzl", "is_standalone_interpreter")
+load("//python/private:is_standalone_interpreter.bzl", "is_standalone_interpreter")
 load("//python/private:repo_utils.bzl", "REPO_DEBUG_ENV_VAR", "repo_utils")
 load(":attrs.bzl", "ATTRS", "use_isolated")
 load(":deps.bzl", "all_repo_names")
@@ -227,8 +227,10 @@ def _whl_library_impl(rctx):
             whl_path = rctx.path(rctx.attr.filename)
         else:
             # It is an sdist and we need to tell PyPI to use a file in this directory
-            # and not use any indexes.
-            extra_pip_args.extend(["--no-index", "--find-links", "."])
+            # and, allow getting build dependencies from PYTHONPATH, which we
+            # setup in this repository rule, but still download any necessary
+            # build deps from PyPI (e.g. `flit_core`) if they are missing.
+            extra_pip_args.extend(["--no-build-isolation", "--find-links", "."])
 
     args = _parse_optional_attrs(rctx, args, extra_pip_args)
 

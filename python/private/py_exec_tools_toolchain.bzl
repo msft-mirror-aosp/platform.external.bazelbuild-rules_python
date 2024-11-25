@@ -16,6 +16,7 @@
 
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("//python/private:sentinel.bzl", "SentinelInfo")
 load("//python/private:toolchain_types.bzl", "TARGET_TOOLCHAIN_TYPE")
 load(":py_exec_tools_info.bzl", "PyExecToolsInfo")
 
@@ -24,9 +25,13 @@ def _py_exec_tools_toolchain_impl(ctx):
     if ctx.attr._visible_for_testing[BuildSettingInfo].value:
         extra_kwargs["toolchain_label"] = ctx.label
 
+    exec_interpreter = ctx.attr.exec_interpreter
+    if SentinelInfo in ctx.attr.exec_interpreter:
+        exec_interpreter = None
+
     return [platform_common.ToolchainInfo(
         exec_tools = PyExecToolsInfo(
-            exec_interpreter = ctx.attr.exec_interpreter,
+            exec_interpreter = exec_interpreter,
             precompiler = ctx.attr.precompiler,
         ),
         **extra_kwargs
@@ -34,16 +39,42 @@ def _py_exec_tools_toolchain_impl(ctx):
 
 py_exec_tools_toolchain = rule(
     implementation = _py_exec_tools_toolchain_impl,
+    doc = """
+Provides a toolchain for build time tools.
+
+This provides `ToolchainInfo` with the following attributes:
+* `exec_tools`: {type}`PyExecToolsInfo` 
+* `toolchain_label`: {type}`Label` _only present when `--visibile_for_testing=True`
+  for internal testing_. The rule's label; this allows identifying what toolchain
+  implmentation was selected for testing purposes.
+""",
     attrs = {
         "exec_interpreter": attr.label(
             default = "//python/private:current_interpreter_executable",
             cfg = "exec",
-            doc = "See PyexecToolsInfo.exec_interpreter.",
+            doc = """
+An interpreter that is directly usable in the exec configuration
+
+If not specified, the interpreter from {obj}`//python:toolchain_type` will
+be used.
+
+To disable, specify the special target {obj}`//python:none`; the raw value `None`
+will use the default.
+
+:::{note}
+This is only useful for `ctx.actions.run` calls that _directly_ invoke the
+interpreter, which is fairly uncommon and low level. It is better to use a
+`cfg="exec"` attribute that points to a `py_binary` rule instead, which will
+handle all the necessary transitions and runtime setup to invoke a program.
+:::
+
+See {obj}`PyExecToolsInfo.exec_interpreter` for further docs.
+""",
         ),
         "precompiler": attr.label(
             allow_files = True,
             cfg = "exec",
-            doc = "See PyExecToolsInfo.precompiler",
+            doc = "See {obj}`PyExecToolsInfo.precompiler`",
         ),
         "_visible_for_testing": attr.label(
             default = "//python/private:visible_for_testing",

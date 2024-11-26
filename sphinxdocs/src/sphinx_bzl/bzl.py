@@ -1,3 +1,16 @@
+# Copyright 2024 The Bazel Authors. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Sphinx extension for documenting Bazel/Starlark objects."""
 
 import ast
@@ -21,7 +34,7 @@ from sphinx.util import docutils as sphinx_docutils
 from sphinx.util import inspect, logging
 from sphinx.util import nodes as sphinx_nodes
 from sphinx.util import typing as sphinx_typing
-from typing_extensions import override
+from typing_extensions import TypeAlias, override
 
 _logger = logging.getLogger(__name__)
 _LOG_PREFIX = f"[{_logger.name}] "
@@ -33,10 +46,10 @@ _INDEX_SUBTYPE_SUB_ENTRY = 2
 _T = TypeVar("_T")
 
 # See https://www.sphinx-doc.org/en/master/extdev/domainapi.html#sphinx.domains.Domain.get_objects
-_GetObjectsTuple: typing.TypeAlias = tuple[str, str, str, str, str, int]
+_GetObjectsTuple: TypeAlias = tuple[str, str, str, str, str, int]
 
 # See SphinxRole.run definition; the docs for role classes are pretty sparse.
-_RoleRunResult: typing.TypeAlias = tuple[
+_RoleRunResult: TypeAlias = tuple[
     list[docutils_nodes.Node], list[docutils_nodes.system_message]
 ]
 
@@ -52,35 +65,6 @@ def _position_iter(values: Collection[_T]) -> tuple[bool, bool, _T]:
     last_i = len(values) - 1
     for i, value in enumerate(values):
         yield i == 0, i == last_i, value
-
-
-# TODO: Remove this. Use @repo//pkg:file.bzl%symbol to identify things instead
-# of dots. This more directly reflects the bzl concept and avoids issues with
-# e.g. repos, directories, or files containing dots themselves.
-def _label_to_dotted_name(label: str) -> str:
-    """Convert an absolute label to a dotted name.
-
-    Args:
-        label: Absolute label with optional repo prefix, e.g. `@a//b:c.bzl`
-            or `//b:c.bzl`
-
-    Returns:
-        Label converted to a dotted notation for easier writing of object
-        references.
-    """
-    if label.endswith(".bzl"):
-        label = label[: -len(".bzl")]
-    elif ":BUILD" in label:
-        label = label[: label.find(":BUILD")]
-    else:
-        raise InvalidValueError(
-            f"Malformed label: Label must end with .bzl or :BUILD*, got {label}"
-        )
-
-    # Make a //foo:bar.bzl convert to foo.bar, not .foo.bar
-    if label.startswith("//"):
-        label = label.lstrip("/")
-    return label.replace("@", "").replace("//", "/").replace(":", "/").replace("/", ".")
 
 
 class InvalidValueError(Exception):
@@ -142,9 +126,9 @@ def _index_node_tuple(
     entry_type: str,
     entry_name: str,
     target: str,
-    main: str | None = None,
-    category_key: str | None = None,
-) -> tuple[str, str, str, str | None, str | None]:
+    main: typing.Union[str, None] = None,
+    category_key: typing.Union[str, None] = None,
+) -> tuple[str, str, str, typing.Union[str, None], typing.Union[str, None]]:
     # For this tuple definition, see:
     # https://www.sphinx-doc.org/en/master/extdev/nodes.html#sphinx.addnodes.index
     # For the definition of entry_type, see:
@@ -153,14 +137,21 @@ def _index_node_tuple(
 
 
 class _BzlObjectId:
+    """Identifies an object defined by a directive.
+
+    This object is returned by `handle_signature()` and passed onto
+    `add_target_and_index()`. It contains information to identify the object
+    that is being described so that it can be indexed and tracked by the
+    domain.
+    """
+
     def __init__(
         self,
         *,
         repo: str,
-        bzl_file: str = None,
+        label: str,
         namespace: str = None,
         symbol: str = None,
-        target: str = None,
     ):
         """Creates an instance.
 
@@ -172,32 +163,78 @@ class _BzlObjectId:
         """
         if not repo:
             raise InvalidValueError("repo cannot be empty")
-        if not bzl_file:
-            raise InvalidValueError("bzl_file cannot be empty")
-        if not symbol:
-            raise InvalidvalueError("symbol cannot be empty")
+        if not repo.startswith("@"):
+            raise InvalidValueError("repo must start with @")
+        if not label:
+            raise InvalidValueError("label cannot be empty")
+        if not label.startswith("//"):
+            raise InvalidValueError("label must start with //")
+
+        if not label.endswith(".bzl") and (symbol or namespace):
+            raise InvalidValueError(
+                "Symbol and namespace can only be specified for .bzl labels"
+            )
 
         self.repo = repo
-        self.bzl_file = bzl_file
+        self.label = label
+        self.package, self.target_name = self.label.split(":")
         self.namespace = namespace
         self.symbol = symbol  # Relative to namespace
+        # doc-relative identifier for this object
+        self.doc_id = symbol or self.target_name
 
-        clean_repo = repo.replace("@", "")
-        package = _label_to_dotted_name(bzl_file)
-        self.full_id = ".".join(filter(None, [clean_repo, package, namespace, symbol]))
+        if not self.doc_id:
+            raise InvalidValueError("doc_id is empty")
+
+        self.full_id = _full_id_from_parts(repo, label, [namespace, symbol])
 
     @classmethod
     def from_env(
-        cls, env: environment.BuildEnvironment, symbol: str = None, target: str = None
+        cls, env: environment.BuildEnvironment, *, symbol: str = None, label: str = None
     ) -> "_BzlObjectId":
-        if target:
-            symbol = target.lstrip("/:").replace(":", ".")
+        label = label or env.ref_context["bzl:file"]
+        if symbol:
+            namespace = ".".join(env.ref_context["bzl:doc_id_stack"])
+        else:
+            namespace = None
+
         return cls(
             repo=env.ref_context["bzl:repo"],
-            bzl_file=env.ref_context["bzl:file"],
-            namespace=".".join(env.ref_context["bzl:doc_id_stack"]),
+            label=label,
+            namespace=namespace,
             symbol=symbol,
         )
+
+    def __repr__(self):
+        return f"_BzlObjectId({self.full_id=})"
+
+
+def _full_id_from_env(env, object_ids=None):
+    return _full_id_from_parts(
+        env.ref_context["bzl:repo"],
+        env.ref_context["bzl:file"],
+        env.ref_context["bzl:object_id_stack"] + (object_ids or []),
+    )
+
+
+def _full_id_from_parts(repo, bzl_file, symbol_names=None):
+    parts = [repo, bzl_file]
+
+    symbol_names = symbol_names or []
+    symbol_names = list(filter(None, symbol_names))  # Filter out empty values
+    if symbol_names:
+        parts.append("%")
+        parts.append(".".join(symbol_names))
+
+    full_id = "".join(parts)
+    return full_id
+
+
+def _parse_full_id(full_id):
+    repo, slashes, label = full_id.partition("//")
+    label = slashes + label
+    label, _, symbol = label.partition("%")
+    return (repo, label, symbol)
 
 
 class _TypeExprParser(ast.NodeVisitor):
@@ -302,10 +339,10 @@ class _BzlXrefField(docfields.Field):
         domain: str,
         target: str,
         innernode: type[sphinx_typing.TextlikeNode] = addnodes.literal_emphasis,
-        contnode: docutils_nodes.Node | None = None,
-        env: environment.BuildEnvironment | None = None,
-        inliner: states.Inliner | None = None,
-        location: docutils_nodes.Element | None = None,
+        contnode: typing.Union[docutils_nodes.Node, None] = None,
+        env: typing.Union[environment.BuildEnvironment, None] = None,
+        inliner: typing.Union[states.Inliner, None] = None,
+        location: typing.Union[docutils_nodes.Element, None] = None,
     ) -> list[docutils_nodes.Node]:
         if rolename in ("arg", "attr"):
             return self._make_xrefs_for_arg_attr(
@@ -322,10 +359,10 @@ class _BzlXrefField(docfields.Field):
         domain: str,
         arg_name: str,
         innernode: type[sphinx_typing.TextlikeNode] = addnodes.literal_emphasis,
-        contnode: docutils_nodes.Node | None = None,
-        env: environment.BuildEnvironment | None = None,
-        inliner: states.Inliner | None = None,
-        location: docutils_nodes.Element | None = None,
+        contnode: typing.Union[docutils_nodes.Node, None] = None,
+        env: typing.Union[environment.BuildEnvironment, None] = None,
+        inliner: typing.Union[states.Inliner, None] = None,
+        location: typing.Union[docutils_nodes.Element, None] = None,
     ) -> list[docutils_nodes.Node]:
         bzl_file = env.ref_context["bzl:file"]
         anchor_prefix = ".".join(env.ref_context["bzl:doc_id_stack"])
@@ -335,7 +372,7 @@ class _BzlXrefField(docfields.Field):
             )
         index_description = f"{arg_name} ({self.name} in {bzl_file}%{anchor_prefix})"
         anchor_id = f"{anchor_prefix}.{arg_name}"
-        full_id = ".".join(env.ref_context["bzl:object_id_stack"] + [arg_name])
+        full_id = _full_id_from_env(env, [arg_name])
 
         env.get_domain(domain).add_object(
             _ObjectEntry(
@@ -408,8 +445,8 @@ class _BzlCsvField(_BzlXrefField):
         domain: str,
         item: tuple,
         env: environment.BuildEnvironment = None,
-        inliner: states.Inliner | None = None,
-        location: docutils_nodes.Element | None = None,
+        inliner: typing.Union[states.Inliner, None] = None,
+        location: typing.Union[docutils_nodes.Element, None] = None,
     ) -> docutils_nodes.field:
         field_text = item[1][0].astext()
         parts = [p.strip() for p in field_text.split(",")]
@@ -459,9 +496,7 @@ class _BzlCurrentFile(sphinx_docutils.SphinxDirective):
             repo = self.env.config.bzl_default_repository_name
         self.env.ref_context["bzl:repo"] = repo
         self.env.ref_context["bzl:file"] = file_label
-        self.env.ref_context["bzl:object_id_stack"] = [
-            _label_to_dotted_name(repo + file_label)
-        ]
+        self.env.ref_context["bzl:object_id_stack"] = []
         self.env.ref_context["bzl:doc_id_stack"] = []
         return []
 
@@ -511,12 +546,15 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
     @override
     def before_content(self) -> None:
         symbol_name = self.names[-1].symbol
-        self.env.ref_context["bzl:object_id_stack"].append(symbol_name)
-        self.env.ref_context["bzl:doc_id_stack"].append(symbol_name)
+        if symbol_name:
+            self.env.ref_context["bzl:object_id_stack"].append(symbol_name)
+            self.env.ref_context["bzl:doc_id_stack"].append(symbol_name)
 
     @override
     def transform_content(self, content_node: addnodes.desc_content) -> None:
-        def first_child_with_class_name(root, class_name) -> "None | Element":
+        def first_child_with_class_name(
+            root, class_name
+        ) -> typing.Union[None, docutils_nodes.Element]:
             matches = root.findall(
                 lambda node: isinstance(node, docutils_nodes.Element)
                 and class_name in node["classes"]
@@ -566,8 +604,9 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
 
     @override
     def after_content(self) -> None:
-        self.env.ref_context["bzl:object_id_stack"].pop()
-        self.env.ref_context["bzl:doc_id_stack"].pop()
+        if self.names[-1].symbol:
+            self.env.ref_context["bzl:object_id_stack"].pop()
+            self.env.ref_context["bzl:doc_id_stack"].pop()
 
     # docs on how to build signatures:
     # https://www.sphinx-doc.org/en/master/extdev/nodes.html#sphinx.addnodes.desc_signature
@@ -668,7 +707,7 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
                 if signature.return_annotation is not signature.empty:
                     sig_node += addnodes.desc_returns("", signature.return_annotation)
 
-        obj_id = _BzlObjectId.from_env(self.env, relative_name)
+        obj_id = _BzlObjectId.from_env(self.env, symbol=relative_name)
 
         sig_node["bzl:object_id"] = obj_id.full_id
         return obj_id
@@ -683,24 +722,25 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
         self, obj_desc: _BzlObjectId, sig: str, sig_node: addnodes.desc_signature
     ) -> None:
         super().add_target_and_index(obj_desc, sig, sig_node)
-        symbol_name = obj_desc.symbol
-        display_name = sig_node.get("bzl:index_display_name", symbol_name)
+        if obj_desc.symbol:
+            display_name = obj_desc.symbol
+            location = obj_desc.label
+            if obj_desc.namespace:
+                location += f"%{obj_desc.namespace}"
+        else:
+            display_name = obj_desc.target_name
+            location = obj_desc.package
 
         anchor_prefix = ".".join(self.env.ref_context["bzl:doc_id_stack"])
         if anchor_prefix:
-            anchor_id = f"{anchor_prefix}.{symbol_name}"
-            file_location = "%" + anchor_prefix
+            anchor_id = f"{anchor_prefix}.{obj_desc.doc_id}"
         else:
-            anchor_id = symbol_name
-            file_location = ""
+            anchor_id = obj_desc.doc_id
 
         sig_node["ids"].append(anchor_id)
 
         object_type_display = self._get_object_type_display_name()
-        index_description = (
-            f"{display_name} ({object_type_display} in "
-            f"{obj_desc.bzl_file}{file_location})"
-        )
+        index_description = f"{display_name} ({object_type_display} in {location})"
         self.indexnode["entries"].extend(
             _index_node_tuple("single", f"{index_type}; {index_description}", anchor_id)
             for index_type in [object_type_display] + self._get_additional_index_types()
@@ -715,7 +755,7 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
             object_type=self.objtype,
             search_priority=1,
             index_entry=domains.IndexEntry(
-                name=symbol_name,
+                name=display_name,
                 subtype=_INDEX_SUBTYPE_NORMAL,
                 docname=self.env.docname,
                 anchor=anchor_id,
@@ -732,13 +772,9 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
                 # Options require \@ for leading @, but don't
                 # remove the escaping slash, so we have to do it manually
                 .lstrip("\\")
-                .lstrip("@")
-                .replace("//", "/")
-                .replace(".bzl%", ".")
-                .replace("/", ".")
-                .replace(":", ".")
             )
-        alt_names.extend(self._get_alt_names(object_entry))
+        extra_alt_names = self._get_alt_names(object_entry)
+        alt_names.extend(extra_alt_names)
 
         self.env.get_domain(self.domain).add_object(object_entry, alt_names=alt_names)
 
@@ -749,7 +785,7 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
     def _object_hierarchy_parts(
         self, sig_node: addnodes.desc_signature
     ) -> tuple[str, ...]:
-        return tuple(sig_node["bzl:object_id"].split("."))
+        return _parse_full_id(sig_node["bzl:object_id"])
 
     @override
     def _toc_entry_name(self, sig_node: addnodes.desc_signature) -> str:
@@ -762,15 +798,25 @@ class _BzlObject(sphinx_directives.ObjectDescription[_BzlObjectId]):
         return self._get_object_type_display_name()
 
     def _get_alt_names(self, object_entry):
-        return [object_entry.full_id.split(".")[-1]]
+        alt_names = []
+        full_id = object_entry.full_id
+        label, _, symbol = full_id.partition("%")
+        if symbol:
+            # Allow referring to the file-relative fully qualified symbol name
+            alt_names.append(symbol)
+            if "." in symbol:
+                # Allow referring to the last component of the symbol
+                alt_names.append(symbol.split(".")[-1])
+        else:
+            # Otherwise, it's a target. Allow referring to just the target name
+            _, _, target_name = label.partition(":")
+            alt_names.append(target_name)
+
+        return alt_names
 
 
 class _BzlCallable(_BzlObject):
     """Abstract base class for objects that are callable."""
-
-    @override
-    def _get_alt_names(self, object_entry):
-        return [object_entry.full_id.split(".")[-1]]
 
 
 class _BzlProvider(_BzlObject):
@@ -789,10 +835,6 @@ class _BzlProvider(_BzlObject):
     ::::
     ```
     """
-
-    @override
-    def _get_alt_names(self, object_entry):
-        return [object_entry.full_id.split(".")[-1]]
 
 
 class _BzlProviderField(_BzlObject):
@@ -822,7 +864,12 @@ class _BzlProviderField(_BzlObject):
 
     @override
     def _get_alt_names(self, object_entry):
-        return [".".join(object_entry.full_id.split(".")[-2:])]
+        alt_names = super()._get_alt_names(object_entry)
+        _, _, symbol = object_entry.full_id.partition("%")
+        # Allow refering to `mod_ext_name.tag_name`, even if the extension
+        # is nested within another object
+        alt_names.append(".".join(symbol.split(".")[-2:]))
+        return alt_names
 
 
 class _BzlRepositoryRule(_BzlCallable):
@@ -1094,6 +1141,15 @@ class _BzlTagClass(_BzlCallable):
     def _get_signature_object_type(self) -> str:
         return ""
 
+    @override
+    def _get_alt_names(self, object_entry):
+        alt_names = super()._get_alt_names(object_entry)
+        _, _, symbol = object_entry.full_id.partition("%")
+        # Allow refering to `ProviderName.field`, even if the provider
+        # is nested within another object
+        alt_names.append(".".join(symbol.split(".")[-2:]))
+        return alt_names
+
 
 class _TargetType(enum.Enum):
     TARGET = "target"
@@ -1120,9 +1176,8 @@ class _BzlTarget(_BzlObject):
         sig_node += addnodes.desc_addname(package, package)
         sig_node += addnodes.desc_name(target_name, target_name)
 
-        obj_id = _BzlObjectId.from_env(self.env, target=sig_text)
+        obj_id = _BzlObjectId.from_env(self.env, label=package + target_name)
         sig_node["bzl:object_id"] = obj_id.full_id
-        sig_node["bzl:index_display_name"] = f"{package}{target_name}"
         return obj_id
 
     @override
@@ -1384,7 +1439,7 @@ class _BzlDomain(domains.Domain):
     object_types = {
         "arg": domains.ObjType("arg", "arg", "obj"),  # macro/function arg
         "aspect": domains.ObjType("aspect", "aspect", "obj"),
-        "attribute": domains.ObjType("attribute", "attribute", "obj"),  # rule attribute
+        "attr": domains.ObjType("attr", "attr", "obj"),  # rule attribute
         "function": domains.ObjType("function", "func", "obj"),
         "method": domains.ObjType("method", "method", "obj"),
         "module-extension": domains.ObjType(
@@ -1403,6 +1458,7 @@ class _BzlDomain(domains.Domain):
         # types are objects that have a constructor and methods/attrs
         "type": domains.ObjType("type", "type", "obj"),
     }
+
     # This controls:
     # * What is recognized when parsing, e.g. ":bzl:ref:`foo`" requires
     # "ref" to be in the role dict below.
@@ -1410,9 +1466,11 @@ class _BzlDomain(domains.Domain):
         "arg": roles.XRefRole(),
         "attr": roles.XRefRole(),
         "default-value": _DefaultValueRole(),
+        "flag": roles.XRefRole(),
         "obj": roles.XRefRole(),
         "required-providers": _RequiredProvidersRole(),
         "return-type": _ReturnTypeRole(),
+        "rule": roles.XRefRole(),
         "target": roles.XRefRole(),
         "type": _TypeRole(),
     }
@@ -1449,12 +1507,14 @@ class _BzlDomain(domains.Domain):
         # dict[str, dict[str, _ObjectEntry]]
         "doc_names": {},
         # Objects by a shorter or alternative name
-        # dict[str, _ObjectEntry]
+        # dict[str, dict[str id, _ObjectEntry]]
         "alt_names": {},
     }
 
     @override
-    def get_full_qualified_name(self, node: docutils_nodes.Element) -> str | None:
+    def get_full_qualified_name(
+        self, node: docutils_nodes.Element
+    ) -> typing.Union[str, None]:
         bzl_file = node.get("bzl:file")
         symbol_name = node.get("bzl:symbol")
         ref_target = node.get("reftarget")
@@ -1498,7 +1558,7 @@ class _BzlDomain(domains.Domain):
         target: str,
         node: addnodes.pending_xref,
         contnode: docutils_nodes.Element,
-    ) -> docutils_nodes.Element | None:
+    ) -> typing.Union[docutils_nodes.Element, None]:
         _log_debug(
             "resolve_xref: fromdocname=%s, typ=%s, target=%s", fromdocname, typ, target
         )
@@ -1515,24 +1575,26 @@ class _BzlDomain(domains.Domain):
 
     def _find_entry_for_xref(
         self, fromdocname: str, object_type: str, target: str
-    ) -> _ObjectEntry | None:
-        # Normalize a variety of formats to the dotted format used internally.
-        # --@foo//:bar flags
-        # --@foo//:bar=value labels
-        # //foo:bar.bzl labels
-        target = (
-            target.lstrip("@/:-")
-            .replace("//", "/")
-            .replace(".bzl%", ".")
-            .replace("/", ".")
-            .replace(":", ".")
-        )
+    ) -> typing.Union[_ObjectEntry, None]:
+        if target.startswith("--"):
+            target = target.strip("-")
+            object_type = "flag"
+
+        # Allow using parentheses, e.g. `foo()` or `foo(x=...)`
+        target, _, _ = target.partition("(")
+
         # Elide the value part of --foo=bar flags
         # Note that the flag value could contain `=`
         if "=" in target:
             target = target[: target.find("=")]
+
         if target in self.data["doc_names"].get(fromdocname, {}):
-            return self.data["doc_names"][fromdocname][target]
+            entry = self.data["doc_names"][fromdocname][target]
+            # Prevent a local doc name masking a global alt name when its of
+            # a different type. e.g. when the macro `foo` refers to the
+            # rule `foo` in another doc.
+            if object_type in self.object_types[entry.object_type].roles:
+                return entry
 
         if object_type == "obj":
             search_space = self.data["objects"]
@@ -1543,7 +1605,15 @@ class _BzlDomain(domains.Domain):
 
         _log_debug("find_entry: alt_names=%s", sorted(self.data["alt_names"].keys()))
         if target in self.data["alt_names"]:
-            return self.data["alt_names"][target]
+            # Give preference to shorter object ids. This is a work around
+            # to allow e.g. `FooInfo` to refer to the FooInfo type rather than
+            # the `FooInfo` constructor.
+            entries = sorted(
+                self.data["alt_names"][target].items(), key=lambda item: len(item[0])
+            )
+            for _, entry in entries:
+                if object_type in self.object_types[entry.object_type].roles:
+                    return entry
 
         return None
 
@@ -1564,26 +1634,20 @@ class _BzlDomain(domains.Domain):
         self.data["objects_by_type"].setdefault(entry.object_type, {})
         self.data["objects_by_type"][entry.object_type][entry.full_id] = entry
 
-        base_name = entry.full_id.split(".")[-1]
-
-        without_repo = entry.full_id.split(".", 1)[1]
+        repo, label, symbol = _parse_full_id(entry.full_id)
+        if symbol:
+            base_name = symbol.split(".")[-1]
+        else:
+            base_name = label.split(":")[-1]
 
         if alt_names is not None:
             alt_names = list(alt_names)
-        alt_names.append(without_repo)
+        # Add the repo-less version as an alias
+        alt_names.append(label + (f"%{symbol}" if symbol else ""))
 
-        for alt_name in alt_names:
-            if alt_name in self.data["alt_names"]:
-                existing = self.data["alt_names"][alt_name]
-                # This situation usually occurs for the constructor function
-                # of a provider, but could occur for e.g. an exported struct
-                # with an attribute the same name as the struct. For lack
-                # of a better option, take the shorter entry, on the assumption
-                # it refers to some container of the longer entry.
-                if len(entry.full_id) < len(existing.full_id):
-                    self.data["alt_names"][alt_name] = entry
-            else:
-                self.data["alt_names"][alt_name] = entry
+        for alt_name in sorted(set(alt_names)):
+            self.data["alt_names"].setdefault(alt_name, {})
+            self.data["alt_names"][alt_name][entry.full_id] = entry
 
         docname = entry.index_entry.docname
         self.data["doc_names"].setdefault(docname, {})
@@ -1593,11 +1657,11 @@ class _BzlDomain(domains.Domain):
         self, docnames: list[str], otherdata: dict[str, typing.Any]
     ) -> None:
         # Merge in simple dict[key, value] data
-        for top_key in ("objects", "alt_names"):
+        for top_key in ("objects",):
             self.data[top_key].update(otherdata.get(top_key, {}))
 
         # Merge in two-level dict[top_key, dict[sub_key, value]] data
-        for top_key in ("objects_by_type", "doc_names"):
+        for top_key in ("objects_by_type", "doc_names", "alt_names"):
             existing_top_map = self.data[top_key]
             for sub_key, sub_values in otherdata.get(top_key, {}).items():
                 if sub_key not in existing_top_map:

@@ -1,4 +1,5 @@
 common --enable_bzlmod
+common --lockfile_mode=update
 
 coverage --java_runtime_version=remotejdk_11
 

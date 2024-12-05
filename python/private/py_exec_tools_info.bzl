@@ -17,7 +17,9 @@ PyExecToolsInfo = provider(
     doc = "Build tools used as part of building Python programs.",
     fields = {
         "exec_interpreter": """
-Optional Target; an interpreter valid for running in the exec configuration.
+:type: Target | None
+
+If available, an interpreter valid for running in the exec configuration.
 When running it in an action, use `DefaultInfo.files_to_run` to ensure all its
 files are appropriately available. An exec interpreter may not be available,
 e.g. if all the exec tools are prebuilt binaries.
@@ -33,7 +35,9 @@ the proper target constraints are being applied when obtaining this from
 the toolchain.
 """,
         "precompiler": """
-Optional Target. The tool to use for generating pyc files. If not available,
+:type: Target | None
+
+If available, the tool to use for generating pyc files. If not available,
 precompiling will not be available.
 
 Must provide one of the following:
@@ -48,7 +52,7 @@ when constructing the action invocation for running the precompiler program
 (typically `exec_interpreter`). See the `PyInterpreterProgramInfo` provider docs
 for details on how to construct an invocation.
 
-If `testing.ExecutionInfo` is provided, it will be used to set execution
+If {obj}`testing.ExecutionInfo` is provided, it will be used to set execution
 requirements. This can be used to control persistent worker settings.
 
 The precompiler command line API is:

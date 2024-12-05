@@ -15,6 +15,7 @@
 
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("//python/private:reexports.bzl", "BuiltinPyRuntimeInfo")
 load("//python/private:util.bzl", "IS_BAZEL_7_OR_HIGHER")
 load(":attributes.bzl", "NATIVE_RULES_ALLOWLIST_ATTRS")
@@ -80,6 +81,10 @@ def _py_runtime_impl(ctx):
     python_version = ctx.attr.python_version
 
     interpreter_version_info = ctx.attr.interpreter_version_info
+    if not interpreter_version_info:
+        python_version_flag = ctx.attr._python_version_flag[BuildSettingInfo].value
+        if python_version_flag:
+            interpreter_version_info = _interpreter_version_info_from_version_str(python_version_flag)
 
     # TODO: Uncomment this after --incompatible_python_disable_py2 defaults to true
     # if ctx.fragments.py.disable_py2 and python_version == "PY2":
@@ -132,13 +137,6 @@ def _py_runtime_impl(ctx):
             runfiles = runfiles,
         ),
     ]
-
-def _is_singleton_depset(files):
-    # Bazel 6 doesn't have this helper to optimize detecting singleton depsets.
-    if _py_builtins:
-        return _py_builtins.is_singleton_depset(files)
-    else:
-        return len(files.to_list()) == 1
 
 # Bind to the name "py_runtime" to preserve the kind/rule_class it shows up
 # as elsewhere.
@@ -204,8 +202,8 @@ See @bazel_tools//tools/python:python_bootstrap_template.txt for more variables.
         "coverage_tool": attr.label(
             allow_files = False,
             doc = """
-This is a target to use for collecting code coverage information from `py_binary`
-and `py_test` targets.
+This is a target to use for collecting code coverage information from
+{rule}`py_binary` and {rule}`py_test` targets.
 
 If set, the target must either produce a single file or be an executable target.
 The path to the single file, or the executable if the target is executable,
@@ -214,7 +212,7 @@ runfiles will be added to the runfiles when coverage is enabled.
 
 The entry point for the tool must be loadable by a Python interpreter (e.g. a
 `.py` or `.pyc` file).  It must accept the command line arguments
-of coverage.py (https://coverage.readthedocs.io), at least including
+of [`coverage.py`](https://coverage.readthedocs.io), at least including
 the `run` and `lcov` subcommands.
 """,
         ),
@@ -260,15 +258,22 @@ the target platform. For an in-build runtime this attribute must not be set.
 """),
         "interpreter_version_info": attr.string_dict(
             doc = """
-Version information about the interpreter this runtime provides. The
-supported keys match the names for `sys.version_info`. While the input
+Version information about the interpreter this runtime provides.
+
+If not specified, uses {obj}`--python_version`
+
+The supported keys match the names for `sys.version_info`. While the input
 values are strings, most are converted to ints. The supported keys are:
   * major: int, the major version number
   * minor: int, the minor version number
   * micro: optional int, the micro version number
   * releaselevel: optional str, the release level
-  * serial: optional int, the serial number of the release"
-            """,
+  * serial: optional int, the serial number of the release
+
+:::{versionchanged} 0.36.0
+{obj}`--python_version` determines the default value.
+:::
+""",
             mandatory = False,
         ),
         "pyc_tag": attr.string(
@@ -306,7 +311,7 @@ The template to use when two stage bootstrapping is enabled
             default = DEFAULT_STUB_SHEBANG,
             doc = """
 "Shebang" expression prepended to the bootstrapping Python stub script
-used when executing `py_binary` targets.
+used when executing {rule}`py_binary` targets.
 
 See https://github.com/bazelbuild/bazel/issues/8685 for
 motivation.
@@ -327,5 +332,25 @@ The {obj}`PyRuntimeInfo.zip_main_template` field.
 :::
 """,
         ),
+        "_python_version_flag": attr.label(
+            default = "//python/config_settings:python_version",
+        ),
     }),
 )
+
+def _is_singleton_depset(files):
+    # Bazel 6 doesn't have this helper to optimize detecting singleton depsets.
+    if _py_builtins:
+        return _py_builtins.is_singleton_depset(files)
+    else:
+        return len(files.to_list()) == 1
+
+def _interpreter_version_info_from_version_str(version_str):
+    parts = version_str.split(".")
+    version_info = {}
+    for key in ("major", "minor", "micro"):
+        if not parts:
+            break
+        version_info[key] = parts.pop(0)
+
+    return version_info

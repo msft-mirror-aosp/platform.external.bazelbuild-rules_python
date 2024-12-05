@@ -14,9 +14,11 @@
 """Common functionality between test/binary executables."""
 
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("@bazel_skylib//lib:structs.bzl", "structs")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@rules_cc//cc:defs.bzl", "cc_common")
 load("//python/private:flags.bzl", "PrecompileAddToRunfilesFlag")
+load("//python/private:py_executable_info.bzl", "PyExecutableInfo")
 load("//python/private:reexports.bzl", "BuiltinPyRuntimeInfo")
 load(
     "//python/private:toolchain_types.bzl",
@@ -96,14 +98,15 @@ filename in `srcs`, `main` must be specified.
             doc = """
 Determines whether pyc files from dependencies should be manually included.
 
-NOTE: This setting is only useful with `--precompile_add_to_runfiles=decided_elsewhere`.
+NOTE: This setting is only useful with {flag}`--precompile_add_to_runfiles=decided_elsewhere`.
 
 Valid values are:
+* `inherit`: Inherit the value from {flag}`--pyc_collection`.
 * `include_pyc`: Add pyc files from dependencies in the binary (from
-  `PyInfo.transitive_pyc_files`.
+  {obj}`PyInfo.transitive_pyc_files`.
 * `disabled`: Don't explicitly add pyc files from dependencies. Note that
   pyc files may still come from dependencies if a target includes them as
-  part of their runfiles (such as when `--precompile_add_to_runfiles=always`
+  part of their runfiles (such as when {obj}`--precompile_add_to_runfiles=always`
   is used).
 """,
         ),
@@ -220,10 +223,14 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
     extra_exec_runfiles = exec_result.extra_runfiles.merge(
         ctx.runfiles(transitive_files = exec_result.extra_files_to_build),
     )
-    runfiles_details = struct(
-        default_runfiles = runfiles_details.default_runfiles.merge(extra_exec_runfiles),
-        data_runfiles = runfiles_details.data_runfiles.merge(extra_exec_runfiles),
-    )
+
+    # Copy any existing fields in case of company patches.
+    runfiles_details = struct(**(
+        structs.to_dict(runfiles_details) | dict(
+            default_runfiles = runfiles_details.default_runfiles.merge(extra_exec_runfiles),
+            data_runfiles = runfiles_details.data_runfiles.merge(extra_exec_runfiles),
+        )
+    ))
 
     return _create_providers(
         ctx = ctx,
@@ -399,8 +406,8 @@ def _get_base_runfiles_for_binary(
         semantics):
     """Returns the set of runfiles necessary prior to executable creation.
 
-    NOTE: The term "common runfiles" refers to the runfiles that both the
-    default and data runfiles have in common.
+    NOTE: The term "common runfiles" refers to the runfiles that are common to
+        runfiles_without_exe, default_runfiles, and data_runfiles.
 
     Args:
         ctx: The rule ctx.
@@ -417,6 +424,10 @@ def _get_base_runfiles_for_binary(
         struct with attributes:
         * default_runfiles: The default runfiles
         * data_runfiles: The data runfiles
+        * runfiles_without_exe: The default runfiles, but without the executable
+          or files specific to the original program/executable.
+        * build_data_file: A file with build stamp information if stamping is enabled, otherwise
+          None.
     """
     common_runfiles_depsets = [main_py_files]
 
@@ -430,7 +441,6 @@ def _get_base_runfiles_for_binary(
             common_runfiles_depsets.append(dep[PyInfo].transitive_pyc_files)
 
     common_runfiles = collect_runfiles(ctx, depset(
-        direct = [executable],
         transitive = common_runfiles_depsets,
     ))
     if extra_deps:
@@ -446,23 +456,31 @@ def _get_base_runfiles_for_binary(
             runfiles = common_runfiles,
         )
 
+    # Don't include build_data.txt in the non-exe runfiles. The build data
+    # may contain program-specific content (e.g. target name).
+    runfiles_with_exe = common_runfiles.merge(ctx.runfiles([executable]))
+
     # Don't include build_data.txt in data runfiles. This allows binaries to
     # contain other binaries while still using the same fixed location symlink
     # for the build_data.txt file. Really, the fixed location symlink should be
     # removed and another way found to locate the underlying build data file.
-    data_runfiles = common_runfiles
+    data_runfiles = runfiles_with_exe
 
     if is_stamping_enabled(ctx, semantics) and semantics.should_include_build_data(ctx):
-        default_runfiles = common_runfiles.merge(_create_runfiles_with_build_data(
+        build_data_file, build_data_runfiles = _create_runfiles_with_build_data(
             ctx,
             semantics.get_central_uncachable_version_file(ctx),
             semantics.get_extra_write_build_data_env(ctx),
-        ))
+        )
+        default_runfiles = runfiles_with_exe.merge(build_data_runfiles)
     else:
-        default_runfiles = common_runfiles
+        build_data_file = None
+        default_runfiles = runfiles_with_exe
 
     return struct(
+        runfiles_without_exe = common_runfiles,
         default_runfiles = default_runfiles,
+        build_data_file = build_data_file,
         data_runfiles = data_runfiles,
     )
 
@@ -470,15 +488,15 @@ def _create_runfiles_with_build_data(
         ctx,
         central_uncachable_version_file,
         extra_write_build_data_env):
-    return ctx.runfiles(
-        symlinks = {
-            BUILD_DATA_SYMLINK_PATH: _write_build_data(
-                ctx,
-                central_uncachable_version_file,
-                extra_write_build_data_env,
-            ),
-        },
+    build_data_file = _write_build_data(
+        ctx,
+        central_uncachable_version_file,
+        extra_write_build_data_env,
     )
+    build_data_runfiles = ctx.runfiles(symlinks = {
+        BUILD_DATA_SYMLINK_PATH: build_data_file,
+    })
+    return build_data_file, build_data_runfiles
 
 def _write_build_data(ctx, central_uncachable_version_file, extra_write_build_data_env):
     # TODO: Remove this logic when a central file is always available
@@ -813,6 +831,12 @@ def _create_providers(
         ),
         create_instrumented_files_info(ctx),
         _create_run_environment_info(ctx, inherited_environment),
+        PyExecutableInfo(
+            main = main_py,
+            runfiles_without_exe = runfiles_details.runfiles_without_exe,
+            build_data_file = runfiles_details.build_data_file,
+            interpreter_path = runtime_details.executable_interpreter_path,
+        ),
     ]
 
     # TODO(b/265840007): Make this non-conditional once Google enables
@@ -903,6 +927,7 @@ def create_base_executable_rule(*, attrs, fragments = [], **kwargs):
     if "py" not in fragments:
         # The list might be frozen, so use concatentation
         fragments = fragments + ["py"]
+    kwargs.setdefault("provides", []).append(PyExecutableInfo)
     return rule(
         # TODO: add ability to remove attrs, i.e. for imports attr
         attrs = dicts.add(EXECUTABLE_ATTRS, attrs),

@@ -14,11 +14,23 @@
 """Common functionality between test/binary executables."""
 
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
+load("@bazel_skylib//lib:structs.bzl", "structs")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("@rules_cc//cc:defs.bzl", "cc_common")
+load("//python/private:flags.bzl", "PrecompileAddToRunfilesFlag")
+load("//python/private:py_executable_info.bzl", "PyExecutableInfo")
+load("//python/private:reexports.bzl", "BuiltinPyRuntimeInfo")
+load(
+    "//python/private:toolchain_types.bzl",
+    "EXEC_TOOLS_TOOLCHAIN_TYPE",
+    TOOLCHAIN_TYPE = "TARGET_TOOLCHAIN_TYPE",
+)
 load(
     ":attributes.bzl",
     "AGNOSTIC_EXECUTABLE_ATTRS",
     "COMMON_ATTRS",
     "PY_SRCS_ATTRS",
+    "PycCollectionAttr",
     "SRCS_VERSION_ALL_VALUES",
     "create_srcs_attr",
     "create_srcs_version_attr",
@@ -26,7 +38,6 @@ load(
 load(":cc_helper.bzl", "cc_helper")
 load(
     ":common.bzl",
-    "TOOLCHAIN_TYPE",
     "check_native_allowed",
     "collect_imports",
     "collect_runfiles",
@@ -41,6 +52,7 @@ load(
 load(
     ":providers.bzl",
     "PyCcLinkParamsProvider",
+    "PyInfo",
     "PyRuntimeInfo",
 )
 load(":py_internal.bzl", "py_internal")
@@ -51,9 +63,6 @@ load(
     "IS_BAZEL",
     "PY_RUNTIME_ATTR_NAME",
 )
-
-# TODO: Load cc_common from rules_cc
-_cc_common = cc_common
 
 _py_builtins = py_internal
 
@@ -83,6 +92,24 @@ application. This file must also be listed in `srcs`. If left unspecified,
 filename in `srcs`, `main` must be specified.
 """,
         ),
+        "pyc_collection": attr.string(
+            default = PycCollectionAttr.INHERIT,
+            values = sorted(PycCollectionAttr.__members__.values()),
+            doc = """
+Determines whether pyc files from dependencies should be manually included.
+
+NOTE: This setting is only useful with {flag}`--precompile_add_to_runfiles=decided_elsewhere`.
+
+Valid values are:
+* `inherit`: Inherit the value from {flag}`--pyc_collection`.
+* `include_pyc`: Add pyc files from dependencies in the binary (from
+  {obj}`PyInfo.transitive_pyc_files`.
+* `disabled`: Don't explicitly add pyc files from dependencies. Note that
+  pyc files may still come from dependencies if a target includes them as
+  part of their runfiles (such as when {obj}`--precompile_add_to_runfiles=always`
+  is used).
+""",
+        ),
         # TODO(b/203567235): In Google, this attribute is deprecated, and can
         # only effectively be PY3. Externally, with Bazel, this attribute has
         # a separate story.
@@ -92,6 +119,15 @@ filename in `srcs`, `main` must be specified.
             default = "PY3",
             # NOTE: Some tests care about the order of these values.
             values = ["PY2", "PY3"],
+            doc = "Defunct, unused, does nothing.",
+        ),
+        "_bootstrap_impl_flag": attr.label(
+            default = "//python/config_settings:bootstrap_impl",
+            providers = [BuildSettingInfo],
+        ),
+        "_pyc_collection_flag": attr.label(
+            default = "//python/config_settings:pyc_collection",
+            providers = [BuildSettingInfo],
         ),
         "_windows_constraints": attr.label_list(
             default = [
@@ -125,9 +161,20 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
 
     main_py = determine_main(ctx)
     direct_sources = filter_to_py_srcs(ctx.files.srcs)
-    output_sources = semantics.maybe_precompile(ctx, direct_sources)
+    precompile_result = semantics.maybe_precompile(ctx, direct_sources)
+
+    # Sourceless precompiled builds omit the main py file from outputs, so
+    # main has to be pointed to the precompiled main instead.
+    if main_py not in precompile_result.keep_srcs:
+        main_py = precompile_result.py_to_pyc_map[main_py]
+    direct_pyc_files = depset(precompile_result.pyc_files)
+
+    executable = _declare_executable_file(ctx)
+    default_outputs = [executable]
+    default_outputs.extend(precompile_result.keep_srcs)
+    default_outputs.extend(precompile_result.pyc_files)
+
     imports = collect_imports(ctx, semantics)
-    executable, files_to_build = _compute_outputs(ctx, output_sources)
 
     runtime_details = _get_runtime_details(ctx, semantics)
     if ctx.configuration.coverage_enabled:
@@ -151,7 +198,8 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
         ctx,
         executable = executable,
         extra_deps = extra_deps,
-        files_to_build = files_to_build,
+        main_py_files = depset([main_py] + precompile_result.keep_srcs),
+        direct_pyc_files = direct_pyc_files,
         extra_common_runfiles = [
             runtime_details.runfiles,
             cc_details.extra_runfiles,
@@ -171,49 +219,57 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
         native_deps_details = native_deps_details,
         runfiles_details = runfiles_details,
     )
-    files_to_build = depset(transitive = [
-        exec_result.extra_files_to_build,
-        files_to_build,
-    ])
-    extra_exec_runfiles = ctx.runfiles(transitive_files = files_to_build)
-    runfiles_details = struct(
-        default_runfiles = runfiles_details.default_runfiles.merge(extra_exec_runfiles),
-        data_runfiles = runfiles_details.data_runfiles.merge(extra_exec_runfiles),
+
+    extra_exec_runfiles = exec_result.extra_runfiles.merge(
+        ctx.runfiles(transitive_files = exec_result.extra_files_to_build),
     )
 
-    legacy_providers, modern_providers = _create_providers(
+    # Copy any existing fields in case of company patches.
+    runfiles_details = struct(**(
+        structs.to_dict(runfiles_details) | dict(
+            default_runfiles = runfiles_details.default_runfiles.merge(extra_exec_runfiles),
+            data_runfiles = runfiles_details.data_runfiles.merge(extra_exec_runfiles),
+        )
+    ))
+
+    return _create_providers(
         ctx = ctx,
         executable = executable,
         runfiles_details = runfiles_details,
         main_py = main_py,
         imports = imports,
         direct_sources = direct_sources,
-        files_to_build = files_to_build,
+        direct_pyc_files = direct_pyc_files,
+        default_outputs = depset(default_outputs, transitive = [exec_result.extra_files_to_build]),
         runtime_details = runtime_details,
         cc_info = cc_details.cc_info_for_propagating,
         inherited_environment = inherited_environment,
         semantics = semantics,
         output_groups = exec_result.output_groups,
     )
-    return struct(
-        legacy_providers = legacy_providers,
-        providers = modern_providers,
-    )
+
+def _get_build_info(ctx, cc_toolchain):
+    build_info_files = py_internal.cc_toolchain_build_info_files(cc_toolchain)
+    if cc_helper.is_stamping_enabled(ctx):
+        # Makes the target depend on BUILD_INFO_KEY, which helps to discover stamped targets
+        # See b/326620485 for more details.
+        ctx.version_file  # buildifier: disable=no-effect
+        return build_info_files.non_redacted_build_info_files.to_list()
+    else:
+        return build_info_files.redacted_build_info_files.to_list()
 
 def _validate_executable(ctx):
     if ctx.attr.python_version != "PY3":
         fail("It is not allowed to use Python 2")
     check_native_allowed(ctx)
 
-def _compute_outputs(ctx, output_sources):
+def _declare_executable_file(ctx):
     if target_platform_has_any_constraint(ctx, ctx.attr._windows_constraints):
         executable = ctx.actions.declare_file(ctx.label.name + ".exe")
     else:
         executable = ctx.actions.declare_file(ctx.label.name)
 
-    # TODO(b/208657718): Remove output_sources from the default outputs
-    # once the depot is cleaned up.
-    return executable, depset([executable] + output_sources)
+    return executable
 
 def _get_runtime_details(ctx, semantics):
     """Gets various information about the Python runtime to use.
@@ -344,20 +400,22 @@ def _get_base_runfiles_for_binary(
         *,
         executable,
         extra_deps,
-        files_to_build,
+        main_py_files,
+        direct_pyc_files,
         extra_common_runfiles,
         semantics):
     """Returns the set of runfiles necessary prior to executable creation.
 
-    NOTE: The term "common runfiles" refers to the runfiles that both the
-    default and data runfiles have in common.
+    NOTE: The term "common runfiles" refers to the runfiles that are common to
+        runfiles_without_exe, default_runfiles, and data_runfiles.
 
     Args:
         ctx: The rule ctx.
         executable: The main executable output.
         extra_deps: List of Targets; additional targets whose runfiles
             will be added to the common runfiles.
-        files_to_build: depset of File of the default outputs to add into runfiles.
+        main_py_files: depset of File of the default outputs to add into runfiles.
+        direct_pyc_files: depset of File of pyc files directly from this target.
         extra_common_runfiles: List of runfiles; additional runfiles that
             will be added to the common runfiles.
         semantics: A `BinarySemantics` struct; see `create_binary_semantics_struct`.
@@ -366,10 +424,24 @@ def _get_base_runfiles_for_binary(
         struct with attributes:
         * default_runfiles: The default runfiles
         * data_runfiles: The data runfiles
+        * runfiles_without_exe: The default runfiles, but without the executable
+          or files specific to the original program/executable.
+        * build_data_file: A file with build stamp information if stamping is enabled, otherwise
+          None.
     """
+    common_runfiles_depsets = [main_py_files]
+
+    if ctx.attr._precompile_add_to_runfiles_flag[BuildSettingInfo].value == PrecompileAddToRunfilesFlag.ALWAYS:
+        common_runfiles_depsets.append(direct_pyc_files)
+    elif PycCollectionAttr.is_pyc_collection_enabled(ctx):
+        common_runfiles_depsets.append(direct_pyc_files)
+        for dep in (ctx.attr.deps + extra_deps):
+            if PyInfo not in dep:
+                continue
+            common_runfiles_depsets.append(dep[PyInfo].transitive_pyc_files)
+
     common_runfiles = collect_runfiles(ctx, depset(
-        direct = [executable],
-        transitive = [files_to_build],
+        transitive = common_runfiles_depsets,
     ))
     if extra_deps:
         common_runfiles = common_runfiles.merge_all([
@@ -384,23 +456,31 @@ def _get_base_runfiles_for_binary(
             runfiles = common_runfiles,
         )
 
+    # Don't include build_data.txt in the non-exe runfiles. The build data
+    # may contain program-specific content (e.g. target name).
+    runfiles_with_exe = common_runfiles.merge(ctx.runfiles([executable]))
+
     # Don't include build_data.txt in data runfiles. This allows binaries to
     # contain other binaries while still using the same fixed location symlink
     # for the build_data.txt file. Really, the fixed location symlink should be
     # removed and another way found to locate the underlying build data file.
-    data_runfiles = common_runfiles
+    data_runfiles = runfiles_with_exe
 
     if is_stamping_enabled(ctx, semantics) and semantics.should_include_build_data(ctx):
-        default_runfiles = common_runfiles.merge(_create_runfiles_with_build_data(
+        build_data_file, build_data_runfiles = _create_runfiles_with_build_data(
             ctx,
             semantics.get_central_uncachable_version_file(ctx),
             semantics.get_extra_write_build_data_env(ctx),
-        ))
+        )
+        default_runfiles = runfiles_with_exe.merge(build_data_runfiles)
     else:
-        default_runfiles = common_runfiles
+        build_data_file = None
+        default_runfiles = runfiles_with_exe
 
     return struct(
+        runfiles_without_exe = common_runfiles,
         default_runfiles = default_runfiles,
+        build_data_file = build_data_file,
         data_runfiles = data_runfiles,
     )
 
@@ -408,15 +488,15 @@ def _create_runfiles_with_build_data(
         ctx,
         central_uncachable_version_file,
         extra_write_build_data_env):
-    return ctx.runfiles(
-        symlinks = {
-            BUILD_DATA_SYMLINK_PATH: _write_build_data(
-                ctx,
-                central_uncachable_version_file,
-                extra_write_build_data_env,
-            ),
-        },
+    build_data_file = _write_build_data(
+        ctx,
+        central_uncachable_version_file,
+        extra_write_build_data_env,
     )
+    build_data_runfiles = ctx.runfiles(symlinks = {
+        BUILD_DATA_SYMLINK_PATH: build_data_file,
+    })
+    return build_data_file, build_data_runfiles
 
 def _write_build_data(ctx, central_uncachable_version_file, extra_write_build_data_env):
     # TODO: Remove this logic when a central file is always available
@@ -493,15 +573,7 @@ def _get_native_deps_details(ctx, *, semantics, cc_details, is_test):
 
     dso = ctx.actions.declare_file(semantics.get_native_deps_dso_name(ctx))
     share_native_deps = py_internal.share_native_deps(ctx)
-    cc_feature_config = cc_configure_features(
-        ctx,
-        cc_toolchain = cc_details.cc_toolchain,
-        # See b/171276569#comment18: this feature string is just to allow
-        # Google's RBE to know the link action is for the Python case so it can
-        # take special actions (though as of Jun 2022, no special action is
-        # taken).
-        extra_features = ["native_deps_link"],
-    )
+    cc_feature_config = cc_details.feature_config
     if share_native_deps:
         linked_lib = _create_shared_native_deps_dso(
             ctx,
@@ -509,6 +581,7 @@ def _get_native_deps_details(ctx, *, semantics, cc_details, is_test):
             is_test = is_test,
             requested_features = cc_feature_config.requested_features,
             feature_configuration = cc_feature_config.feature_configuration,
+            cc_toolchain = cc_details.cc_toolchain,
         )
         ctx.actions.symlink(
             output = dso,
@@ -517,19 +590,22 @@ def _get_native_deps_details(ctx, *, semantics, cc_details, is_test):
         )
     else:
         linked_lib = dso
-    _cc_common.link(
+
+    # The regular cc_common.link API can't be used because several
+    # args are private-use only; see # private comments
+    py_internal.link(
         name = ctx.label.name,
         actions = ctx.actions,
         linking_contexts = [cc_info.linking_context],
         output_type = "dynamic_library",
-        never_link = True,
-        native_deps = True,
+        never_link = True,  # private
+        native_deps = True,  # private
         feature_configuration = cc_feature_config.feature_configuration,
         cc_toolchain = cc_details.cc_toolchain,
-        test_only_target = is_test,
+        test_only_target = is_test,  # private
         stamp = 1 if is_stamping_enabled(ctx, semantics) else 0,
-        main_output = linked_lib,
-        use_shareable_artifact_factory = True,
+        main_output = linked_lib,  # private
+        use_shareable_artifact_factory = True,  # private
         # NOTE: Only flags not captured by cc_info.linking_context need to
         # be manually passed
         user_link_flags = semantics.get_native_deps_user_link_flags(ctx),
@@ -545,14 +621,15 @@ def _create_shared_native_deps_dso(
         cc_info,
         is_test,
         feature_configuration,
-        requested_features):
-    linkstamps = cc_info.linking_context.linkstamps()
+        requested_features,
+        cc_toolchain):
+    linkstamps = py_internal.linking_context_linkstamps(cc_info.linking_context)
 
     partially_disabled_thin_lto = (
-        _cc_common.is_enabled(
+        cc_common.is_enabled(
             feature_name = "thin_lto_linkstatic_tests_use_shared_nonlto_backends",
             feature_configuration = feature_configuration,
-        ) and not _cc_common.is_enabled(
+        ) and not cc_common.is_enabled(
             feature_name = "thin_lto_all_linkstatic_use_shared_nonlto_backends",
             feature_configuration = feature_configuration,
         )
@@ -570,8 +647,11 @@ def _create_shared_native_deps_dso(
             for input in cc_info.linking_context.linker_inputs.to_list()
             for flag in input.user_link_flags
         ],
-        linkstamps = [linkstamp.file() for linkstamp in linkstamps.to_list()],
-        build_info_artifacts = _cc_common.get_build_info(ctx) if linkstamps else [],
+        linkstamps = [
+            py_internal.linkstamp_file(linkstamp)
+            for linkstamp in linkstamps.to_list()
+        ],
+        build_info_artifacts = _get_build_info(ctx, cc_toolchain) if linkstamps else [],
         features = requested_features,
         is_test_target_partially_disabled_thin_lto = is_test and partially_disabled_thin_lto,
     )
@@ -701,7 +781,8 @@ def _create_providers(
         executable,
         main_py,
         direct_sources,
-        files_to_build,
+        direct_pyc_files,
+        default_outputs,
         runfiles_details,
         imports,
         cc_info,
@@ -718,7 +799,8 @@ def _create_providers(
         direct_sources: list of Files; the direct, raw `.py` sources for the target.
             This should only be Python source files. It should not include pyc
             files.
-        files_to_build: depset of Files; the files for DefaultInfo.files
+        direct_pyc_files: depset of File; the direct pyc files for the target.
+        default_outputs: depset of Files; the files for DefaultInfo.files
         runfiles_details: runfiles that will become the default  and data runfiles.
         imports: depset of strings; the import paths to propagate
         cc_info: optional CcInfo; Linking information to propagate as
@@ -732,14 +814,12 @@ def _create_providers(
         semantics: BinarySemantics struct; see create_binary_semantics()
 
     Returns:
-        A two-tuple of:
-        1. A dict of legacy providers.
-        2. A list of modern providers.
+        A list of modern providers.
     """
     providers = [
         DefaultInfo(
             executable = executable,
-            files = files_to_build,
+            files = default_outputs,
             default_runfiles = _py_builtins.make_runfiles_respect_legacy_external_runfiles(
                 ctx,
                 runfiles_details.default_runfiles,
@@ -751,12 +831,39 @@ def _create_providers(
         ),
         create_instrumented_files_info(ctx),
         _create_run_environment_info(ctx, inherited_environment),
+        PyExecutableInfo(
+            main = main_py,
+            runfiles_without_exe = runfiles_details.runfiles_without_exe,
+            build_data_file = runfiles_details.build_data_file,
+            interpreter_path = runtime_details.executable_interpreter_path,
+        ),
     ]
 
     # TODO(b/265840007): Make this non-conditional once Google enables
     # --incompatible_use_python_toolchains.
     if runtime_details.toolchain_runtime:
-        providers.append(runtime_details.toolchain_runtime)
+        py_runtime_info = runtime_details.toolchain_runtime
+        providers.append(py_runtime_info)
+
+        # Re-add the builtin PyRuntimeInfo for compatibility to make
+        # transitioning easier, but only if it isn't already added because
+        # returning the same provider type multiple times is an error.
+        # NOTE: The PyRuntimeInfo from the toolchain could be a rules_python
+        # PyRuntimeInfo or a builtin PyRuntimeInfo -- a user could have used the
+        # builtin py_runtime rule or defined their own. We can't directly detect
+        # the type of the provider object, but the rules_python PyRuntimeInfo
+        # object has an extra attribute that the builtin one doesn't.
+        if hasattr(py_runtime_info, "interpreter_version_info"):
+            providers.append(BuiltinPyRuntimeInfo(
+                interpreter_path = py_runtime_info.interpreter_path,
+                interpreter = py_runtime_info.interpreter,
+                files = py_runtime_info.files,
+                coverage_tool = py_runtime_info.coverage_tool,
+                coverage_files = py_runtime_info.coverage_files,
+                python_version = py_runtime_info.python_version,
+                stub_shebang = py_runtime_info.stub_shebang,
+                bootstrap_template = py_runtime_info.bootstrap_template,
+            ))
 
     # TODO(b/163083591): Remove the PyCcLinkParamsProvider once binaries-in-deps
     # are cleaned up.
@@ -768,6 +875,7 @@ def _create_providers(
     py_info, deps_transitive_sources, builtin_py_info = create_py_info(
         ctx,
         direct_sources = depset(direct_sources),
+        direct_pyc_files = direct_pyc_files,
         imports = imports,
     )
 
@@ -783,13 +891,13 @@ def _create_providers(
     providers.append(builtin_py_info)
     providers.append(create_output_group_info(py_info.transitive_sources, output_groups))
 
-    extra_legacy_providers, extra_providers = semantics.get_extra_providers(
+    extra_providers = semantics.get_extra_providers(
         ctx,
         main_py = main_py,
         runtime_details = runtime_details,
     )
     providers.extend(extra_providers)
-    return extra_legacy_providers, providers
+    return providers
 
 def _create_run_environment_info(ctx, inherited_environment):
     expanded_env = {}
@@ -819,15 +927,24 @@ def create_base_executable_rule(*, attrs, fragments = [], **kwargs):
     if "py" not in fragments:
         # The list might be frozen, so use concatentation
         fragments = fragments + ["py"]
+    kwargs.setdefault("provides", []).append(PyExecutableInfo)
     return rule(
         # TODO: add ability to remove attrs, i.e. for imports attr
         attrs = dicts.add(EXECUTABLE_ATTRS, attrs),
-        toolchains = [TOOLCHAIN_TYPE] + _CC_TOOLCHAINS,
+        toolchains = [
+            TOOLCHAIN_TYPE,
+            config_common.toolchain_type(EXEC_TOOLS_TOOLCHAIN_TYPE, mandatory = False),
+        ] + _CC_TOOLCHAINS,
         fragments = fragments,
         **kwargs
     )
 
-def cc_configure_features(ctx, *, cc_toolchain, extra_features):
+def cc_configure_features(
+        ctx,
+        *,
+        cc_toolchain,
+        extra_features,
+        linking_mode = "static_linking_mode"):
     """Configure C++ features for Python purposes.
 
     Args:
@@ -835,16 +952,19 @@ def cc_configure_features(ctx, *, cc_toolchain, extra_features):
         cc_toolchain: The CcToolchain the target is using.
         extra_features: list of strings; additional features to request be
             enabled.
+        linking_mode: str; either "static_linking_mode" or
+            "dynamic_linking_mode". Specifies the linking mode feature for
+            C++ linking.
 
     Returns:
         struct of the feature configuration and all requested features.
     """
-    requested_features = ["static_linking_mode"]
+    requested_features = [linking_mode]
     requested_features.extend(extra_features)
     requested_features.extend(ctx.features)
     if "legacy_whole_archive" not in ctx.disabled_features:
         requested_features.append("legacy_whole_archive")
-    feature_configuration = _cc_common.configure_features(
+    feature_configuration = cc_common.configure_features(
         ctx = ctx,
         cc_toolchain = cc_toolchain,
         requested_features = requested_features,

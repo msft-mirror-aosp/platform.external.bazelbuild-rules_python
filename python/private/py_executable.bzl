@@ -17,24 +17,19 @@ load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@bazel_skylib//lib:structs.bzl", "structs")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@rules_cc//cc:defs.bzl", "cc_common")
-load("//python/private:flags.bzl", "PrecompileAddToRunfilesFlag")
-load("//python/private:py_executable_info.bzl", "PyExecutableInfo")
-load("//python/private:reexports.bzl", "BuiltinPyRuntimeInfo")
-load(
-    "//python/private:toolchain_types.bzl",
-    "EXEC_TOOLS_TOOLCHAIN_TYPE",
-    TOOLCHAIN_TYPE = "TARGET_TOOLCHAIN_TYPE",
-)
 load(
     ":attributes.bzl",
     "AGNOSTIC_EXECUTABLE_ATTRS",
     "COMMON_ATTRS",
     "PY_SRCS_ATTRS",
+    "PrecompileAttr",
     "PycCollectionAttr",
+    "REQUIRED_EXEC_GROUPS",
     "SRCS_VERSION_ALL_VALUES",
     "create_srcs_attr",
     "create_srcs_version_attr",
 )
+load(":builders.bzl", "builders")
 load(":cc_helper.bzl", "cc_helper")
 load(
     ":common.bzl",
@@ -49,19 +44,23 @@ load(
     "target_platform_has_any_constraint",
     "union_attrs",
 )
-load(
-    ":providers.bzl",
-    "PyCcLinkParamsProvider",
-    "PyInfo",
-    "PyRuntimeInfo",
-)
+load(":py_cc_link_params_info.bzl", "PyCcLinkParamsInfo")
+load(":py_executable_info.bzl", "PyExecutableInfo")
+load(":py_info.bzl", "PyInfo")
 load(":py_internal.bzl", "py_internal")
+load(":py_runtime_info.bzl", "PyRuntimeInfo")
+load(":reexports.bzl", "BuiltinPyInfo", "BuiltinPyRuntimeInfo")
 load(
     ":semantics.bzl",
     "ALLOWED_MAIN_EXTENSIONS",
     "BUILD_DATA_SYMLINK_PATH",
     "IS_BAZEL",
     "PY_RUNTIME_ATTR_NAME",
+)
+load(
+    ":toolchain_types.bzl",
+    "EXEC_TOOLS_TOOLCHAIN_TYPE",
+    TOOLCHAIN_TYPE = "TARGET_TOOLCHAIN_TYPE",
 )
 
 _py_builtins = py_internal
@@ -98,16 +97,13 @@ filename in `srcs`, `main` must be specified.
             doc = """
 Determines whether pyc files from dependencies should be manually included.
 
-NOTE: This setting is only useful with {flag}`--precompile_add_to_runfiles=decided_elsewhere`.
-
 Valid values are:
-* `inherit`: Inherit the value from {flag}`--pyc_collection`.
-* `include_pyc`: Add pyc files from dependencies in the binary (from
-  {obj}`PyInfo.transitive_pyc_files`.
-* `disabled`: Don't explicitly add pyc files from dependencies. Note that
-  pyc files may still come from dependencies if a target includes them as
-  part of their runfiles (such as when {obj}`--precompile_add_to_runfiles=always`
-  is used).
+* `inherit`: Inherit the value from {flag}`--precompile`.
+* `include_pyc`: Add implicitly generated pyc files from dependencies. i.e.
+  pyc files for targets that specify {attr}`precompile="inherit"`.
+* `disabled`: Don't add implicitly generated pyc files. Note that
+  pyc files may still come from dependencies that enable precompiling at the
+  target level.
 """,
         ),
         # TODO(b/203567235): In Google, this attribute is deprecated, and can
@@ -123,10 +119,6 @@ Valid values are:
         ),
         "_bootstrap_impl_flag": attr.label(
             default = "//python/config_settings:bootstrap_impl",
-            providers = [BuildSettingInfo],
-        ),
-        "_pyc_collection_flag": attr.label(
-            default = "//python/config_settings:pyc_collection",
             providers = [BuildSettingInfo],
         ),
         "_windows_constraints": attr.label_list(
@@ -163,16 +155,27 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
     direct_sources = filter_to_py_srcs(ctx.files.srcs)
     precompile_result = semantics.maybe_precompile(ctx, direct_sources)
 
+    required_py_files = precompile_result.keep_srcs
+    required_pyc_files = []
+    implicit_pyc_files = []
+    implicit_pyc_source_files = direct_sources
+
+    if ctx.attr.precompile == PrecompileAttr.ENABLED:
+        required_pyc_files.extend(precompile_result.pyc_files)
+    else:
+        implicit_pyc_files.extend(precompile_result.pyc_files)
+
     # Sourceless precompiled builds omit the main py file from outputs, so
     # main has to be pointed to the precompiled main instead.
-    if main_py not in precompile_result.keep_srcs:
+    if (main_py not in precompile_result.keep_srcs and
+        PycCollectionAttr.is_pyc_collection_enabled(ctx)):
         main_py = precompile_result.py_to_pyc_map[main_py]
-    direct_pyc_files = depset(precompile_result.pyc_files)
 
     executable = _declare_executable_file(ctx)
-    default_outputs = [executable]
-    default_outputs.extend(precompile_result.keep_srcs)
-    default_outputs.extend(precompile_result.pyc_files)
+    default_outputs = builders.DepsetBuilder()
+    default_outputs.add(executable)
+    default_outputs.add(precompile_result.keep_srcs)
+    default_outputs.add(required_pyc_files)
 
     imports = collect_imports(ctx, semantics)
 
@@ -198,8 +201,10 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
         ctx,
         executable = executable,
         extra_deps = extra_deps,
-        main_py_files = depset([main_py] + precompile_result.keep_srcs),
-        direct_pyc_files = direct_pyc_files,
+        required_py_files = required_py_files,
+        required_pyc_files = required_pyc_files,
+        implicit_pyc_files = implicit_pyc_files,
+        implicit_pyc_source_files = implicit_pyc_source_files,
         extra_common_runfiles = [
             runtime_details.runfiles,
             cc_details.extra_runfiles,
@@ -219,6 +224,7 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
         native_deps_details = native_deps_details,
         runfiles_details = runfiles_details,
     )
+    default_outputs.add(exec_result.extra_files_to_build)
 
     extra_exec_runfiles = exec_result.extra_runfiles.merge(
         ctx.runfiles(transitive_files = exec_result.extra_files_to_build),
@@ -238,9 +244,11 @@ def py_executable_base_impl(ctx, *, semantics, is_test, inherited_environment = 
         runfiles_details = runfiles_details,
         main_py = main_py,
         imports = imports,
-        direct_sources = direct_sources,
-        direct_pyc_files = direct_pyc_files,
-        default_outputs = depset(default_outputs, transitive = [exec_result.extra_files_to_build]),
+        required_py_files = required_py_files,
+        required_pyc_files = required_pyc_files,
+        implicit_pyc_files = implicit_pyc_files,
+        implicit_pyc_source_files = implicit_pyc_source_files,
+        default_outputs = default_outputs.build(),
         runtime_details = runtime_details,
         cc_info = cc_details.cc_info_for_propagating,
         inherited_environment = inherited_environment,
@@ -400,8 +408,10 @@ def _get_base_runfiles_for_binary(
         *,
         executable,
         extra_deps,
-        main_py_files,
-        direct_pyc_files,
+        required_py_files,
+        required_pyc_files,
+        implicit_pyc_files,
+        implicit_pyc_source_files,
         extra_common_runfiles,
         semantics):
     """Returns the set of runfiles necessary prior to executable creation.
@@ -414,8 +424,15 @@ def _get_base_runfiles_for_binary(
         executable: The main executable output.
         extra_deps: List of Targets; additional targets whose runfiles
             will be added to the common runfiles.
-        main_py_files: depset of File of the default outputs to add into runfiles.
-        direct_pyc_files: depset of File of pyc files directly from this target.
+        required_py_files: `depset[File]` the direct, `.py` sources for the
+            target that **must** be included by downstream targets. This should
+            only be Python source files. It should not include pyc files.
+        required_pyc_files: `depset[File]` the direct `.pyc` files this target
+            produces.
+        implicit_pyc_files: `depset[File]` pyc files that are only used if pyc
+            collection is enabled.
+        implicit_pyc_source_files: `depset[File]` source files for implicit pyc
+            files that are used when the implicit pyc files are not.
         extra_common_runfiles: List of runfiles; additional runfiles that
             will be added to the common runfiles.
         semantics: A `BinarySemantics` struct; see `create_binary_semantics_struct`.
@@ -429,26 +446,37 @@ def _get_base_runfiles_for_binary(
         * build_data_file: A file with build stamp information if stamping is enabled, otherwise
           None.
     """
-    common_runfiles_depsets = [main_py_files]
+    common_runfiles = builders.RunfilesBuilder()
+    common_runfiles.files.add(required_py_files)
+    common_runfiles.files.add(required_pyc_files)
+    pyc_collection_enabled = PycCollectionAttr.is_pyc_collection_enabled(ctx)
+    if pyc_collection_enabled:
+        common_runfiles.files.add(implicit_pyc_files)
+    else:
+        common_runfiles.files.add(implicit_pyc_source_files)
 
-    if ctx.attr._precompile_add_to_runfiles_flag[BuildSettingInfo].value == PrecompileAddToRunfilesFlag.ALWAYS:
-        common_runfiles_depsets.append(direct_pyc_files)
-    elif PycCollectionAttr.is_pyc_collection_enabled(ctx):
-        common_runfiles_depsets.append(direct_pyc_files)
-        for dep in (ctx.attr.deps + extra_deps):
-            if PyInfo not in dep:
-                continue
-            common_runfiles_depsets.append(dep[PyInfo].transitive_pyc_files)
+    for dep in (ctx.attr.deps + extra_deps):
+        if not (PyInfo in dep or BuiltinPyInfo in dep):
+            continue
+        info = dep[PyInfo] if PyInfo in dep else dep[BuiltinPyInfo]
+        common_runfiles.files.add(info.transitive_sources)
 
-    common_runfiles = collect_runfiles(ctx, depset(
-        transitive = common_runfiles_depsets,
-    ))
+        # Everything past this won't work with BuiltinPyInfo
+        if not hasattr(info, "transitive_pyc_files"):
+            continue
+
+        common_runfiles.files.add(info.transitive_pyc_files)
+        if pyc_collection_enabled:
+            common_runfiles.files.add(info.transitive_implicit_pyc_files)
+        else:
+            common_runfiles.files.add(info.transitive_implicit_pyc_source_files)
+
+    common_runfiles.runfiles.append(collect_runfiles(ctx))
     if extra_deps:
-        common_runfiles = common_runfiles.merge_all([
-            t[DefaultInfo].default_runfiles
-            for t in extra_deps
-        ])
-    common_runfiles = common_runfiles.merge_all(extra_common_runfiles)
+        common_runfiles.add_runfiles(targets = extra_deps)
+    common_runfiles.add(extra_common_runfiles)
+
+    common_runfiles = common_runfiles.build(ctx)
 
     if semantics.should_create_init_files(ctx):
         common_runfiles = _py_builtins.merge_runfiles_with_generated_inits_empty_files_supplier(
@@ -780,8 +808,10 @@ def _create_providers(
         ctx,
         executable,
         main_py,
-        direct_sources,
-        direct_pyc_files,
+        required_py_files,
+        required_pyc_files,
+        implicit_pyc_files,
+        implicit_pyc_source_files,
         default_outputs,
         runfiles_details,
         imports,
@@ -796,15 +826,20 @@ def _create_providers(
         ctx: The rule ctx.
         executable: File; the target's executable file.
         main_py: File; the main .py entry point.
-        direct_sources: list of Files; the direct, raw `.py` sources for the target.
-            This should only be Python source files. It should not include pyc
-            files.
-        direct_pyc_files: depset of File; the direct pyc files for the target.
+        required_py_files: `depset[File]` the direct, `.py` sources for the
+            target that **must** be included by downstream targets. This should
+            only be Python source files. It should not include pyc files.
+        required_pyc_files: `depset[File]` the direct `.pyc` files this target
+            produces.
+        implicit_pyc_files: `depset[File]` pyc files that are only used if pyc
+            collection is enabled.
+        implicit_pyc_source_files: `depset[File]` source files for implicit pyc
+            files that are used when the implicit pyc files are not.
         default_outputs: depset of Files; the files for DefaultInfo.files
         runfiles_details: runfiles that will become the default  and data runfiles.
         imports: depset of strings; the import paths to propagate
         cc_info: optional CcInfo; Linking information to propagate as
-            PyCcLinkParamsProvider. Note that only the linking information
+            PyCcLinkParamsInfo. Note that only the linking information
             is propagated, not the whole CcInfo.
         inherited_environment: list of strings; Environment variable names
             that should be inherited from the environment the executuble
@@ -853,7 +888,7 @@ def _create_providers(
         # builtin py_runtime rule or defined their own. We can't directly detect
         # the type of the provider object, but the rules_python PyRuntimeInfo
         # object has an extra attribute that the builtin one doesn't.
-        if hasattr(py_runtime_info, "interpreter_version_info"):
+        if hasattr(py_runtime_info, "interpreter_version_info") and BuiltinPyRuntimeInfo != None:
             providers.append(BuiltinPyRuntimeInfo(
                 interpreter_path = py_runtime_info.interpreter_path,
                 interpreter = py_runtime_info.interpreter,
@@ -865,17 +900,19 @@ def _create_providers(
                 bootstrap_template = py_runtime_info.bootstrap_template,
             ))
 
-    # TODO(b/163083591): Remove the PyCcLinkParamsProvider once binaries-in-deps
+    # TODO(b/163083591): Remove the PyCcLinkParamsInfo once binaries-in-deps
     # are cleaned up.
     if cc_info:
         providers.append(
-            PyCcLinkParamsProvider(cc_info = cc_info),
+            PyCcLinkParamsInfo(cc_info = cc_info),
         )
 
     py_info, deps_transitive_sources, builtin_py_info = create_py_info(
         ctx,
-        direct_sources = depset(direct_sources),
-        direct_pyc_files = direct_pyc_files,
+        required_py_files = required_py_files,
+        required_pyc_files = required_pyc_files,
+        implicit_pyc_files = implicit_pyc_files,
+        implicit_pyc_source_files = implicit_pyc_source_files,
         imports = imports,
     )
 
@@ -888,7 +925,8 @@ def _create_providers(
         )
 
     providers.append(py_info)
-    providers.append(builtin_py_info)
+    if builtin_py_info:
+        providers.append(builtin_py_info)
     providers.append(create_output_group_info(py_info.transitive_sources, output_groups))
 
     extra_providers = semantics.get_extra_providers(
@@ -928,6 +966,7 @@ def create_base_executable_rule(*, attrs, fragments = [], **kwargs):
         # The list might be frozen, so use concatentation
         fragments = fragments + ["py"]
     kwargs.setdefault("provides", []).append(PyExecutableInfo)
+    kwargs["exec_groups"] = REQUIRED_EXEC_GROUPS | (kwargs.get("exec_groups") or {})
     return rule(
         # TODO: add ability to remove attrs, i.e. for imports attr
         attrs = dicts.add(EXECUTABLE_ATTRS, attrs),

@@ -15,27 +15,27 @@
 """Tests for py_cc_toolchain."""
 
 load("@rules_testing//lib:analysis_test.bzl", "analysis_test", "test_suite")
-load("@rules_testing//lib:truth.bzl", "matching")
-load("//tests:cc_info_subject.bzl", "cc_info_subject")
-load("//tests:default_info_subject.bzl", "default_info_subject")
-load("//tests:py_cc_toolchain_info_subject.bzl", "PyCcToolchainInfoSubject")
+load("@rules_testing//lib:truth.bzl", "matching", "subjects")
+load("//python/cc:py_cc_toolchain.bzl", "py_cc_toolchain")
+load("//tests/support:cc_info_subject.bzl", "cc_info_subject")
+load("//tests/support:py_cc_toolchain_info_subject.bzl", "PyCcToolchainInfoSubject")
 
 _tests = []
 
-def _py_cc_toolchain_test(name):
+def _test_py_cc_toolchain(name):
     analysis_test(
         name = name,
-        impl = _py_cc_toolchain_test_impl,
-        target = "//tests/cc:fake_py_cc_toolchain_impl",
+        impl = _test_py_cc_toolchain_impl,
+        target = "//tests/support/cc_toolchains:fake_py_cc_toolchain_impl",
         attrs = {
             "header": attr.label(
-                default = "//tests/cc:fake_header.h",
+                default = "//tests/support/cc_toolchains:fake_header.h",
                 allow_single_file = True,
             ),
         },
     )
 
-def _py_cc_toolchain_test_impl(env, target):
+def _test_py_cc_toolchain_impl(env, target):
     env.expect.that_target(target).has_provider(platform_common.ToolchainInfo)
 
     toolchain = PyCcToolchainInfoSubject.new(
@@ -63,18 +63,44 @@ def _py_cc_toolchain_test_impl(env, target):
         matching.str_matches("*/fake_include"),
     ])
 
-    # TODO: Once subjects.default_info is available, do
-    # default_info = headers_providers.get("DefaultInfo", factory=subjects.default_info)
-    # https://github.com/bazelbuild/rules_python/issues/1297
-    default_info = default_info_subject(
-        headers_providers.get("DefaultInfo", factory = lambda v, meta: v),
-        meta = env.expect.meta.derive(expr = "default_info"),
-    )
+    default_info = headers_providers.get("DefaultInfo", factory = subjects.default_info)
     default_info.runfiles().contains_predicate(
-        matching.str_matches("*/cc/data.txt"),
+        matching.str_matches("*/cc_toolchains/data.txt"),
     )
 
-_tests.append(_py_cc_toolchain_test)
+    libs_providers = toolchain.libs().providers_map()
+    libs_providers.keys().contains_exactly(["CcInfo", "DefaultInfo"])
+
+    cc_info = libs_providers.get("CcInfo", factory = cc_info_subject)
+
+    cc_info.linking_context().linker_inputs().has_size(2)
+
+    default_info = libs_providers.get("DefaultInfo", factory = subjects.default_info)
+    default_info.runfiles().contains("{workspace}/tests/support/cc_toolchains/libdata.txt")
+    default_info.runfiles().contains_predicate(
+        matching.str_matches("/libpython3."),
+    )
+
+_tests.append(_test_py_cc_toolchain)
+
+def _test_libs_optional(name):
+    py_cc_toolchain(
+        name = name + "_subject",
+        libs = None,
+        headers = "//tests/support/cc_toolchains:fake_headers",
+        python_version = "4.5",
+    )
+    analysis_test(
+        name = name,
+        target = name + "_subject",
+        impl = _test_libs_optional_impl,
+    )
+
+def _test_libs_optional_impl(env, target):
+    libs = target[platform_common.ToolchainInfo].py_cc_toolchain.libs
+    env.expect.that_bool(libs == None).equals(True)
+
+_tests.append(_test_libs_optional)
 
 def py_cc_toolchain_test_suite(name):
     test_suite(

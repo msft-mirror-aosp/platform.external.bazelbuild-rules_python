@@ -41,13 +41,14 @@ load("//:internal_setup.bzl", "rules_python_internal_setup")
 
 rules_python_internal_setup()
 
+load("@pythons_hub//:versions.bzl", "MINOR_MAPPING", "PYTHON_VERSIONS")
 load("//python:repositories.bzl", "python_register_multi_toolchains")
-load("//python:versions.bzl", "MINOR_MAPPING")
 
 python_register_multi_toolchains(
     name = "python",
-    default_version = MINOR_MAPPING.values()[-2],
-    python_versions = MINOR_MAPPING.values(),
+    default_version = MINOR_MAPPING.values()[-3],  # Use 3.11.10
+    # Integration tests verify each version, so register all of them.
+    python_versions = PYTHON_VERSIONS,
 )
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")
@@ -85,7 +86,7 @@ load("@rules_python_gazelle_plugin//:deps.bzl", _py_gazelle_deps = "gazelle_deps
 _py_gazelle_deps()
 
 # This interpreter is used for various rules_python dev-time tools
-load("@python//3.11.6:defs.bzl", "interpreter")
+load("@python//3.11.9:defs.bzl", "interpreter")
 
 #####################
 # Install twine for our own runfiles wheel publishing.
@@ -94,35 +95,34 @@ load("@python//3.11.6:defs.bzl", "interpreter")
 load("@rules_python//python:pip.bzl", "pip_parse")
 
 pip_parse(
-    name = "publish_deps",
+    name = "rules_python_publish_deps",
     python_interpreter_target = interpreter,
     requirements_darwin = "//tools/publish:requirements_darwin.txt",
     requirements_lock = "//tools/publish:requirements.txt",
     requirements_windows = "//tools/publish:requirements_windows.txt",
 )
 
-load("@publish_deps//:requirements.bzl", "install_deps")
+load("@rules_python_publish_deps//:requirements.bzl", "install_deps")
 
 install_deps()
+
+pip_parse(
+    name = "pypiserver",
+    python_interpreter_target = interpreter,
+    requirements_lock = "//examples/wheel:requirements_server.txt",
+)
+
+load("@pypiserver//:requirements.bzl", install_pypiserver = "install_deps")
+
+install_pypiserver()
 
 #####################
 # Install sphinx for doc generation.
 
 pip_parse(
     name = "dev_pip",
-    experimental_requirement_cycles = {
-        "sphinx": [
-            "sphinx",
-            "sphinxcontrib-serializinghtml",
-            "sphinxcontrib-qthelp",
-            "sphinxcontrib-htmlhelp",
-            "sphinxcontrib-devhelp",
-            "sphinxcontrib-applehelp",
-        ],
-    },
-    incompatible_generate_aliases = True,
     python_interpreter_target = interpreter,
-    requirements_lock = "//docs/sphinx:requirements.txt",
+    requirements_lock = "//docs:requirements.txt",
 )
 
 load("@dev_pip//:requirements.bzl", docs_install_deps = "install_deps")

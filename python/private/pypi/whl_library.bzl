@@ -244,7 +244,10 @@ def _whl_library_impl(rctx):
 
         repo_utils.execute_checked(
             rctx,
-            op = op_tmpl.format(name = rctx.attr.name, requirement = rctx.attr.requirement),
+            # truncate the requirement value when logging it / reporting
+            # progress since it may contain several ' --hash=sha256:...
+            # --hash=sha256:...' substrings that fill up the console
+            op = op_tmpl.format(name = rctx.attr.name, requirement = rctx.attr.requirement.split(" ", 1)[0]),
             arguments = args,
             environment = environment,
             quiet = rctx.attr.quiet,
@@ -263,15 +266,16 @@ def _whl_library_impl(rctx):
             if whl_path.basename in patch_dst.whls:
                 patches[patch_file] = patch_dst.patch_strip
 
-        whl_path = patch_whl(
-            rctx,
-            op = "whl_library.PatchWhl({}, {})".format(rctx.attr.name, rctx.attr.requirement),
-            python_interpreter = python_interpreter,
-            whl_path = whl_path,
-            patches = patches,
-            quiet = rctx.attr.quiet,
-            timeout = rctx.attr.timeout,
-        )
+        if patches:
+            whl_path = patch_whl(
+                rctx,
+                op = "whl_library.PatchWhl({}, {})".format(rctx.attr.name, rctx.attr.requirement),
+                python_interpreter = python_interpreter,
+                whl_path = whl_path,
+                patches = patches,
+                quiet = rctx.attr.quiet,
+                timeout = rctx.attr.timeout,
+            )
 
     target_platforms = rctx.attr.experimental_target_platforms
     if target_platforms:

@@ -15,20 +15,17 @@
 
 load("@bazel_skylib//lib:dicts.bzl", "dicts")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("//python/private:flags.bzl", "PrecompileAddToRunfilesFlag")
-load(
-    "//python/private:toolchain_types.bzl",
-    "EXEC_TOOLS_TOOLCHAIN_TYPE",
-    TOOLCHAIN_TYPE = "TARGET_TOOLCHAIN_TYPE",
-)
 load(
     ":attributes.bzl",
     "COMMON_ATTRS",
     "PY_SRCS_ATTRS",
+    "PrecompileAttr",
+    "REQUIRED_EXEC_GROUPS",
     "SRCS_VERSION_ALL_VALUES",
     "create_srcs_attr",
     "create_srcs_version_attr",
 )
+load(":builders.bzl", "builders")
 load(
     ":common.bzl",
     "check_native_allowed",
@@ -40,8 +37,14 @@ load(
     "filter_to_py_srcs",
     "union_attrs",
 )
-load(":providers.bzl", "PyCcLinkParamsProvider")
+load(":flags.bzl", "AddSrcsToRunfilesFlag", "PrecompileFlag")
+load(":py_cc_link_params_info.bzl", "PyCcLinkParamsInfo")
 load(":py_internal.bzl", "py_internal")
+load(
+    ":toolchain_types.bzl",
+    "EXEC_TOOLS_TOOLCHAIN_TYPE",
+    TOOLCHAIN_TYPE = "TARGET_TOOLCHAIN_TYPE",
+)
 
 _py_builtins = py_internal
 
@@ -50,6 +53,11 @@ LIBRARY_ATTRS = union_attrs(
     PY_SRCS_ATTRS,
     create_srcs_version_attr(values = SRCS_VERSION_ALL_VALUES),
     create_srcs_attr(mandatory = False),
+    {
+        "_add_srcs_to_runfiles_flag": attr.label(
+            default = "//python/config_settings:add_srcs_to_runfiles",
+        ),
+    },
 )
 
 def py_library_impl(ctx, *, semantics):
@@ -66,24 +74,39 @@ def py_library_impl(ctx, *, semantics):
     direct_sources = filter_to_py_srcs(ctx.files.srcs)
 
     precompile_result = semantics.maybe_precompile(ctx, direct_sources)
-    direct_pyc_files = depset(precompile_result.pyc_files)
-    default_outputs = depset(precompile_result.keep_srcs, transitive = [direct_pyc_files])
 
-    extra_runfiles_depsets = [depset(precompile_result.keep_srcs)]
-    if ctx.attr._precompile_add_to_runfiles_flag[BuildSettingInfo].value == PrecompileAddToRunfilesFlag.ALWAYS:
-        extra_runfiles_depsets.append(direct_pyc_files)
+    required_py_files = precompile_result.keep_srcs
+    required_pyc_files = []
+    implicit_pyc_files = []
+    implicit_pyc_source_files = direct_sources
 
-    runfiles = collect_runfiles(
-        ctx = ctx,
-        files = depset(transitive = extra_runfiles_depsets),
-    )
+    precompile_attr = ctx.attr.precompile
+    precompile_flag = ctx.attr._precompile_flag[BuildSettingInfo].value
+    if (precompile_attr == PrecompileAttr.ENABLED or
+        precompile_flag == PrecompileFlag.FORCE_ENABLED):
+        required_pyc_files.extend(precompile_result.pyc_files)
+    else:
+        implicit_pyc_files.extend(precompile_result.pyc_files)
+
+    default_outputs = builders.DepsetBuilder()
+    default_outputs.add(precompile_result.keep_srcs)
+    default_outputs.add(required_pyc_files)
+    default_outputs = default_outputs.build()
+
+    runfiles = builders.RunfilesBuilder()
+    if AddSrcsToRunfilesFlag.is_enabled(ctx):
+        runfiles.add(required_py_files)
+    runfiles.add(collect_runfiles(ctx))
+    runfiles = runfiles.build(ctx)
 
     cc_info = semantics.get_cc_info_for_library(ctx)
     py_info, deps_transitive_sources, builtins_py_info = create_py_info(
         ctx,
-        direct_sources = depset(direct_sources),
+        required_py_files = required_py_files,
+        required_pyc_files = required_pyc_files,
+        implicit_pyc_files = implicit_pyc_files,
+        implicit_pyc_source_files = implicit_pyc_source_files,
         imports = collect_imports(ctx, semantics),
-        direct_pyc_files = direct_pyc_files,
     )
 
     # TODO(b/253059598): Remove support for extra actions; https://github.com/bazelbuild/bazel/issues/16455
@@ -94,14 +117,16 @@ def py_library_impl(ctx, *, semantics):
             dependency_transitive_python_sources = deps_transitive_sources,
         )
 
-    return [
+    providers = [
         DefaultInfo(files = default_outputs, runfiles = runfiles),
         py_info,
-        builtins_py_info,
         create_instrumented_files_info(ctx),
-        PyCcLinkParamsProvider(cc_info = cc_info),
+        PyCcLinkParamsInfo(cc_info = cc_info),
         create_output_group_info(py_info.transitive_sources, extra_groups = {}),
     ]
+    if builtins_py_info:
+        providers.append(builtins_py_info)
+    return providers
 
 _DEFAULT_PY_LIBRARY_DOC = """
 A library of Python code that can be depended upon.
@@ -113,6 +138,10 @@ Default outputs:
 NOTE: Precompilation affects which of the default outputs are included in the
 resulting runfiles. See the precompile-related attributes and flags for
 more information.
+
+:::{versionchanged} 0.37.0
+Source files are no longer added to the runfiles directly.
+:::
 """
 
 def create_py_library_rule(*, attrs = {}, **kwargs):
@@ -131,6 +160,7 @@ def create_py_library_rule(*, attrs = {}, **kwargs):
     # TODO: b/253818097 - fragments=py is only necessary so that
     # RequiredConfigFragmentsTest passes
     fragments = kwargs.pop("fragments", None) or []
+    kwargs["exec_groups"] = REQUIRED_EXEC_GROUPS | (kwargs.get("exec_groups") or {})
     return rule(
         attrs = dicts.add(LIBRARY_ATTRS, attrs),
         toolchains = [

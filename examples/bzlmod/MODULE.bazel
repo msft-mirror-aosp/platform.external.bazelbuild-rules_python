@@ -22,7 +22,7 @@ bazel_dep(name = "protobuf", version = "24.4", repo_name = "com_google_protobuf"
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     configure_coverage_tool = True,
-    # Only set when you have mulitple toolchain versions.
+    # Only set when you have multiple toolchain versions.
     is_default = True,
     python_version = "3.9",
 )
@@ -37,11 +37,59 @@ python.toolchain(
     python_version = "3.10",
 )
 
+# One can override the actual toolchain versions that are available, which can be useful
+# when optimizing what gets downloaded and when.
+python.override(
+    available_python_versions = [
+        "3.10.9",
+        "3.9.18",
+        "3.9.19",
+        # The following is used by the `other_module` and we need to include it here
+        # as well.
+        "3.11.8",
+    ],
+    # Also override the `minor_mapping` so that the root module,
+    # instead of rules_python's defaulting to the latest available version,
+    # controls what full version is used when `3.x` is requested.
+    minor_mapping = {
+        "3.9": "3.9.19",
+    },
+)
+
+# Or the sources that the toolchains come from for all platforms
+python.single_version_override(
+    patch_strip = 1,
+    # The user can specify patches to be applied to all interpreters.
+    patches = [],
+    python_version = "3.10.2",
+    sha256 = {
+        "aarch64-apple-darwin": "1409acd9a506e2d1d3b65c1488db4e40d8f19d09a7df099667c87a506f71c0ef",
+        "aarch64-unknown-linux-gnu": "8f351a8cc348bb45c0f95b8634c8345ec6e749e483384188ad865b7428342703",
+        "x86_64-apple-darwin": "8146ad4390710ec69b316a5649912df0247d35f4a42e2aa9615bffd87b3e235a",
+        "x86_64-pc-windows-msvc": "a1d9a594cd3103baa24937ad9150c1a389544b4350e859200b3e5c036ac352bd",
+        "x86_64-unknown-linux-gnu": "9b64eca2a94f7aff9409ad70bdaa7fbbf8148692662e764401883957943620dd",
+    },
+    urls = ["20220227/cpython-{python_version}+20220227-{platform}-{build}.tar.gz"],
+)
+
+# Or a single platform. This can be used in combination with the
+# `single_version_override` and `single_version_platform_override` will be
+# applied after `single_version_override`. Any values present in this override
+# will overwrite the values set by the `single_version_override`
+python.single_version_platform_override(
+    patch_strip = 1,
+    patches = [],
+    platform = "aarch64-apple-darwin",
+    python_version = "3.10.2",
+    sha256 = "1409acd9a506e2d1d3b65c1488db4e40d8f19d09a7df099667c87a506f71c0ef",
+    urls = ["20220227/cpython-{python_version}+20220227-{platform}-{build}.tar.gz"],
+)
+
 # You only need to load this repositories if you are using multiple Python versions.
 # See the tests folder for various examples on using multiple Python versions.
 # The names "python_3_9" and "python_3_10" are autmatically created by the repo
 # rules based on the `python_version` arg values.
-use_repo(python, "python_3_10", "python_3_9", "python_versions")
+use_repo(python, "python_3_10", "python_3_9", "python_versions", "pythons_hub")
 
 # EXPERIMENTAL: This is experimental and may be removed without notice
 uv = use_extension("@rules_python//python/uv:extensions.bzl", "uv")
@@ -135,17 +183,7 @@ pip.parse(
     ],
     hub_name = "pip",
     python_version = "3.9",
-    # The requirements files for each platform that we want to support.
-    requirements_by_platform = {
-        # Default requirements file for needs to explicitly provide the platforms
-        "//:requirements_lock_3_9.txt": "linux_*,osx_*",
-        # This API allows one to specify additional platforms that the users
-        # configure the toolchains for themselves. In this example we add
-        # `windows_aarch64` to illustrate that `rules_python` won't fail to
-        # process the value, but it does not mean that this example will work
-        # on Windows ARM.
-        "//:requirements_windows_3_9.txt": "windows_x86_64,windows_aarch64",
-    },
+    requirements_lock = "requirements_lock_3_9.txt",
     # These modifications were created above and we
     # are providing pip.parse with the label of the mod
     # and the name of the wheel.
@@ -179,8 +217,17 @@ pip.parse(
     ],
     hub_name = "pip",
     python_version = "3.10",
-    requirements_lock = "//:requirements_lock_3_10.txt",
-    requirements_windows = "//:requirements_windows_3_10.txt",
+    # The requirements files for each platform that we want to support.
+    requirements_by_platform = {
+        # Default requirements file for needs to explicitly provide the platforms
+        "//:requirements_lock_3_10.txt": "linux_*,osx_*",
+        # This API allows one to specify additional platforms that the users
+        # configure the toolchains for themselves. In this example we add
+        # `windows_aarch64` to illustrate that `rules_python` won't fail to
+        # process the value, but it does not mean that this example will work
+        # on Windows ARM.
+        "//:requirements_windows_3_10.txt": "windows_x86_64,windows_aarch64",
+    },
     # These modifications were created above and we
     # are providing pip.parse with the label of the mod
     # and the name of the wheel.
@@ -209,3 +256,6 @@ local_path_override(
     module_name = "other_module",
     path = "other_module",
 )
+
+# example test dependencies
+bazel_dep(name = "rules_shell", version = "0.2.0", dev_dependency = True)

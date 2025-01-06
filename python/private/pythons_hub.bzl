@@ -14,11 +14,8 @@
 
 "Repo rule used by bzlmod extension to create a repo that has a map of Python interpreters and their labels"
 
-load("//python/private:full_version.bzl", "full_version")
-load(
-    "//python/private:toolchains_repo.bzl",
-    "python_toolchain_build_file_content",
-)
+load(":text_util.bzl", "render")
+load(":toolchains_repo.bzl", "python_toolchain_build_file_content")
 
 def _have_same_length(*lists):
     if not lists:
@@ -32,6 +29,12 @@ load("@@{rules_python}//python/private:py_toolchain_suite.bzl", "py_toolchain_su
 bzl_library(
     name = "interpreters_bzl",
     srcs = ["interpreters.bzl"],
+    visibility = ["@rules_python//:__subpackages__"],
+)
+
+bzl_library(
+    name = "versions_bzl",
+    srcs = ["versions.bzl"],
     visibility = ["@rules_python//:__subpackages__"],
 )
 
@@ -59,7 +62,7 @@ def _hub_build_file_content(
         [
             python_toolchain_build_file_content(
                 prefix = prefixes[i],
-                python_version = full_version(python_versions[i]),
+                python_version = python_versions[i],
                 set_python_version_constraint = set_python_version_constraints[i],
                 user_repository_name = user_repository_names[i],
             )
@@ -81,6 +84,12 @@ DEFAULT_PYTHON_VERSION = "{default_python_version}"
 
 _line_for_hub_template = """\
     "{name}_host": Label("@{name}_host//:python"),
+"""
+
+_versions_bzl_template = """
+DEFAULT_PYTHON_VERSION = "{default_python_version}"
+MINOR_MAPPING = {minor_mapping}
+PYTHON_VERSIONS = {python_versions}
 """
 
 def _hub_repo_impl(rctx):
@@ -108,8 +117,22 @@ def _hub_repo_impl(rctx):
     rctx.file(
         "interpreters.bzl",
         _interpreters_bzl_template.format(
-            interpreter_labels = interpreter_labels,
+            # TODO @aignas 2024-09-28: before 1.0 remove the value from here
             default_python_version = rctx.attr.default_python_version,
+            interpreter_labels = interpreter_labels,
+        ),
+        executable = False,
+    )
+
+    rctx.file(
+        "versions.bzl",
+        _versions_bzl_template.format(
+            default_python_version = rctx.attr.default_python_version,
+            minor_mapping = render.dict(rctx.attr.minor_mapping),
+            python_versions = rctx.attr.python_versions or render.list(sorted({
+                v: None
+                for v in rctx.attr.toolchain_python_versions
+            })),
         ),
         executable = False,
     )
@@ -123,15 +146,23 @@ This rule also writes out the various toolchains for the different Python versio
     implementation = _hub_repo_impl,
     attrs = {
         "default_python_version": attr.string(
-            doc = "Default Python version for the build.",
+            doc = "Default Python version for the build in `X.Y` or `X.Y.Z` format.",
             mandatory = True,
+        ),
+        "minor_mapping": attr.string_dict(
+            doc = "The minor mapping of the `X.Y` to `X.Y.Z` format that is used in config settings.",
+            mandatory = True,
+        ),
+        "python_versions": attr.string_list(
+            doc = "The list of python versions to include in the `interpreters.bzl` if the toolchains are not specified. Used in `WORKSPACE` builds.",
+            mandatory = False,
         ),
         "toolchain_prefixes": attr.string_list(
             doc = "List prefixed for the toolchains",
             mandatory = True,
         ),
         "toolchain_python_versions": attr.string_list(
-            doc = "List of Python versions for the toolchains",
+            doc = "List of Python versions for the toolchains. In `X.Y.Z` format.",
             mandatory = True,
         ),
         "toolchain_set_python_version_constraints": attr.string_list(

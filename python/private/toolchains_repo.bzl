@@ -30,8 +30,8 @@ load(
     "PLATFORMS",
     "WINDOWS_NAME",
 )
-load("//python/private:repo_utils.bzl", "REPO_DEBUG_ENV_VAR", "repo_utils")
-load("//python/private:text_util.bzl", "render")
+load(":repo_utils.bzl", "REPO_DEBUG_ENV_VAR", "repo_utils")
+load(":text_util.bzl", "render")
 
 def get_repository_name(repository_workspace):
     dummy_label = "//:_"
@@ -56,9 +56,6 @@ def python_toolchain_build_file_content(
         build_content: Text containing toolchain definitions
     """
 
-    # We create a list of toolchain content from iterating over
-    # the enumeration of PLATFORMS.  We enumerate PLATFORMS in
-    # order to get us an index to increment the increment.
     return "\n\n".join([
         """\
 py_toolchain_suite(
@@ -314,14 +311,6 @@ toolchain_aliases repo because referencing the `python` interpreter target from
 this repo causes an eager fetch of the toolchain for the host platform.
     """,
     attrs = {
-        "platforms": attr.string_list(
-            doc = "List of platforms for which aliases shall be created",
-        ),
-        "python_version": attr.string(doc = "The Python version."),
-        "user_repository_name": attr.string(
-            mandatory = True,
-            doc = "The base name for all created repositories, like 'python38'.",
-        ),
         "_rule_name": attr.string(default = "host_toolchain"),
         "_rules_python_workspace": attr.label(default = Label("//:WORKSPACE")),
     },
@@ -366,11 +355,13 @@ def multi_pip_parse(name, requirements_lock, **kwargs):
         name = name,
         python_versions = {python_versions},
         requirements_lock = requirements_lock,
+        minor_mapping = {minor_mapping},
         **kwargs
     )
 
 """.format(
         python_versions = rctx.attr.python_versions.keys(),
+        minor_mapping = render.indent(render.dict(rctx.attr.minor_mapping), indent = " " * 8).lstrip(),
         rules_python = rules_python,
     )
     rctx.file("pip.bzl", content = pip_bzl)
@@ -379,6 +370,7 @@ def multi_pip_parse(name, requirements_lock, **kwargs):
 multi_toolchain_aliases = repository_rule(
     _multi_toolchain_aliases_impl,
     attrs = {
+        "minor_mapping": attr.string_dict(doc = "The mapping between `X.Y` and `X.Y.Z` python version values"),
         "python_versions": attr.string_dict(doc = "The Python versions."),
         "_rules_python_workspace": attr.label(default = Label("//:WORKSPACE")),
     },

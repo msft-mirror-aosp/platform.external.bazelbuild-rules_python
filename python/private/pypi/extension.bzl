@@ -15,10 +15,11 @@
 "pip module extension for use with bzlmod"
 
 load("@bazel_features//:features.bzl", "bazel_features")
-load("@pythons_hub//:interpreters.bzl", "DEFAULT_PYTHON_VERSION", "INTERPRETER_LABELS")
+load("@pythons_hub//:interpreters.bzl", "INTERPRETER_LABELS")
 load("//python/private:auth.bzl", "AUTH_ATTRS")
 load("//python/private:normalize_name.bzl", "normalize_name")
 load("//python/private:repo_utils.bzl", "repo_utils")
+load("//python/private:semver.bzl", "semver")
 load("//python/private:version_label.bzl", "version_label")
 load(":attrs.bzl", "use_isolated")
 load(":evaluate_markers.bzl", "evaluate_markers", EVALUATE_MARKERS_SRCS = "SRCS")
@@ -32,22 +33,8 @@ load(":simpleapi_download.bzl", "simpleapi_download")
 load(":whl_library.bzl", "whl_library")
 load(":whl_repo_name.bzl", "whl_repo_name")
 
-def _parse_version(version):
-    major, _, version = version.partition(".")
-    minor, _, version = version.partition(".")
-    patch, _, version = version.partition(".")
-    build, _, version = version.partition(".")
-
-    return struct(
-        # use semver vocabulary here
-        major = major,
-        minor = minor,
-        patch = patch,  # this is called `micro` in the Python interpreter versioning scheme
-        build = build,
-    )
-
 def _major_minor_version(version):
-    version = _parse_version(version)
+    version = semver(version)
     return "{}.{}".format(version.major, version.minor)
 
 def _whl_mods_impl(mctx):
@@ -164,9 +151,6 @@ def _create_whl_repos(module_ctx, pip_attr, whl_map, whl_overrides, group_map, s
 
     get_index_urls = None
     if pip_attr.experimental_index_url:
-        if pip_attr.download_only:
-            fail("Currently unsupported to use `download_only` and `experimental_index_url`")
-
         get_index_urls = lambda ctx, distributions: simpleapi_download(
             ctx,
             attr = struct(
@@ -195,6 +179,7 @@ def _create_whl_repos(module_ctx, pip_attr, whl_map, whl_overrides, group_map, s
             python_version = major_minor,
             logger = logger,
         ),
+        extra_pip_args = pip_attr.extra_pip_args,
         get_index_urls = get_index_urls,
         # NOTE @aignas 2024-08-02: , we will execute any interpreter that we find either
         # in the PATH or if specified as a label. We will configure the env
@@ -275,11 +260,11 @@ def _create_whl_repos(module_ctx, pip_attr, whl_map, whl_overrides, group_map, s
             is_exposed = False
             for requirement in requirements:
                 is_exposed = is_exposed or requirement.is_exposed
-                for distribution in requirement.whls + [requirement.sdist]:
-                    if not distribution:
-                        # sdist may be None
-                        continue
+                dists = requirement.whls
+                if not pip_attr.download_only and requirement.sdist:
+                    dists = dists + [requirement.sdist]
 
+                for distribution in dists:
                     found_something = True
                     is_hub_reproducible = False
 
@@ -288,8 +273,13 @@ def _create_whl_repos(module_ctx, pip_attr, whl_map, whl_overrides, group_map, s
                     if pip_attr.auth_patterns:
                         whl_library_args["auth_patterns"] = pip_attr.auth_patterns
 
-                    # pip is not used to download wheels and the python `whl_library` helpers are only extracting things
-                    whl_library_args.pop("extra_pip_args", None)
+                    if distribution.filename.endswith(".whl"):
+                        # pip is not used to download wheels and the python `whl_library` helpers are only extracting things
+                        whl_library_args.pop("extra_pip_args", None)
+                    else:
+                        # For sdists, they will be built by `pip`, so we still
+                        # need to pass the extra args there.
+                        pass
 
                     # This is no-op because pip is not used to download the wheel.
                     whl_library_args.pop("download_only", None)
@@ -513,7 +503,6 @@ def _pip_impl(module_ctx):
                 key: json.encode(value)
                 for key, value in whl_map.items()
             },
-            default_version = _major_minor_version(DEFAULT_PYTHON_VERSION),
             packages = sorted(exposed_packages.get(hub_name, {})),
             groups = hub_group_map.get(hub_name),
         )
@@ -572,6 +561,11 @@ In the future this could be defaulted to `https://pypi.org` when this feature be
 stable.
 
 This is equivalent to `--index-url` `pip` option.
+
+:::{versionchanged} 0.37.0
+If {attr}`download_only` is set, then `sdist` archives will be discarded and `pip.parse` will
+operate in wheel-only mode.
+:::
 """,
         ),
         "experimental_index_url_overrides": attr.string_dict(

@@ -18,12 +18,13 @@ load("@rules_python_internal//:rules_python_config.bzl", rp_config = "config")
 load("@rules_testing//lib:analysis_test.bzl", "analysis_test")
 load("@rules_testing//lib:truth.bzl", "matching")
 load("@rules_testing//lib:util.bzl", rt_util = "util")
+load("//python:py_executable_info.bzl", "PyExecutableInfo")
+load("//python/private:reexports.bzl", "BuiltinPyRuntimeInfo")  # buildifier: disable=bzl-visibility
 load("//python/private:util.bzl", "IS_BAZEL_7_OR_HIGHER")  # buildifier: disable=bzl-visibility
 load("//tests/base_rules:base_tests.bzl", "create_base_tests")
 load("//tests/base_rules:util.bzl", "WINDOWS_ATTR", pt_util = "util")
-load("//tests/support:support.bzl", "LINUX_X86_64", "WINDOWS_X86_64")
-
-_BuiltinPyRuntimeInfo = PyRuntimeInfo
+load("//tests/support:py_executable_info_subject.bzl", "PyExecutableInfoSubject")
+load("//tests/support:support.bzl", "CC_TOOLCHAIN", "CROSSTOOL_TOP", "LINUX_X86_64", "WINDOWS_X86_64")
 
 _tests = []
 
@@ -49,8 +50,8 @@ def _test_basic_windows(name, config):
             # platforms.
             "//command_line_option:build_python_zip": "true",
             "//command_line_option:cpu": "windows_x86_64",
-            "//command_line_option:crosstool_top": Label("//tests/cc:cc_toolchain_suite"),
-            "//command_line_option:extra_toolchains": [str(Label("//tests/cc:all"))],
+            "//command_line_option:crosstool_top": CROSSTOOL_TOP,
+            "//command_line_option:extra_toolchains": [CC_TOOLCHAIN],
             "//command_line_option:platforms": [WINDOWS_X86_64],
         },
         attr_values = {"target_compatible_with": target_compatible_with},
@@ -94,8 +95,8 @@ def _test_basic_zip(name, config):
             # platforms.
             "//command_line_option:build_python_zip": "true",
             "//command_line_option:cpu": "linux_x86_64",
-            "//command_line_option:crosstool_top": Label("//tests/cc:cc_toolchain_suite"),
-            "//command_line_option:extra_toolchains": [str(Label("//tests/cc:all"))],
+            "//command_line_option:crosstool_top": CROSSTOOL_TOP,
+            "//command_line_option:extra_toolchains": [CC_TOOLCHAIN],
             "//command_line_option:platforms": [LINUX_X86_64],
         },
         attr_values = {"target_compatible_with": target_compatible_with},
@@ -132,10 +133,18 @@ def _test_executable_in_runfiles_impl(env, target):
         exe = ".exe"
     else:
         exe = ""
-
     env.expect.that_target(target).runfiles().contains_at_least([
         "{workspace}/{package}/{test_name}_subject" + exe,
     ])
+
+    if rp_config.enable_pystar:
+        py_exec_info = env.expect.that_target(target).provider(PyExecutableInfo, factory = PyExecutableInfoSubject.new)
+        py_exec_info.main().path().contains("_subject.py")
+        py_exec_info.interpreter_path().contains("python")
+        py_exec_info.runfiles_without_exe().contains_none_of([
+            "{workspace}/{package}/{test_name}_subject" + exe,
+            "{workspace}/{package}/{test_name}_subject",
+        ])
 
 def _test_default_main_can_be_generated(name, config):
     rt_util.helper_target(
@@ -349,9 +358,10 @@ def _test_py_runtime_info_provided_impl(env, target):
     # Make sure that the rules_python loaded symbol is provided.
     env.expect.that_target(target).has_provider(RulesPythonPyRuntimeInfo)
 
-    # For compatibility during the transition, the builtin PyRuntimeInfo should
-    # also be provided.
-    env.expect.that_target(target).has_provider(_BuiltinPyRuntimeInfo)
+    if BuiltinPyRuntimeInfo != None:
+        # For compatibility during the transition, the builtin PyRuntimeInfo should
+        # also be provided.
+        env.expect.that_target(target).has_provider(BuiltinPyRuntimeInfo)
 
 _tests.append(_test_py_runtime_info_provided)
 

@@ -26,14 +26,15 @@ LINUX_X86_64 = Label("//tests/support:linux_x86_64")
 WINDOWS = Label("//tests/support:windows")
 WINDOWS_X86_64 = Label("//tests/support:windows_x86_64")
 
-PLATFORM_TOOLCHAIN = str(Label("//tests/support:platform_toolchain"))
-CC_TOOLCHAIN = str(Label("//tests/cc:all"))
+PY_TOOLCHAINS = str(Label("//tests/support/py_toolchains:all"))
+CC_TOOLCHAIN = str(Label("//tests/support/cc_toolchains:all"))
+CROSSTOOL_TOP = Label("//tests/support/cc_toolchains:cc_toolchain_suite")
 
 # str() around Label() is necessary because rules_testing's config_settings
 # doesn't accept yet Label objects.
+ADD_SRCS_TO_RUNFILES = str(Label("//python/config_settings:add_srcs_to_runfiles"))
 EXEC_TOOLS_TOOLCHAIN = str(Label("//python/config_settings:exec_tools_toolchain"))
 PRECOMPILE = str(Label("//python/config_settings:precompile"))
-PRECOMPILE_ADD_TO_RUNFILES = str(Label("//python/config_settings:precompile_add_to_runfiles"))
 PRECOMPILE_SOURCE_RETENTION = str(Label("//python/config_settings:precompile_source_retention"))
 PYC_COLLECTION = str(Label("//python/config_settings:pyc_collection"))
 PYTHON_VERSION = str(Label("//python/config_settings:python_version"))

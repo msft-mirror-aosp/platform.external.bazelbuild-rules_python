@@ -16,7 +16,7 @@
 
 load("//python/private:auth.bzl", "AUTH_ATTRS", "get_auth")
 load("//python/private:envsubst.bzl", "envsubst")
-load("//python/private:python_repositories.bzl", "is_standalone_interpreter")
+load("//python/private:is_standalone_interpreter.bzl", "is_standalone_interpreter")
 load("//python/private:repo_utils.bzl", "REPO_DEBUG_ENV_VAR", "repo_utils")
 load(":attrs.bzl", "ATTRS", "use_isolated")
 load(":deps.bzl", "all_repo_names")
@@ -227,8 +227,10 @@ def _whl_library_impl(rctx):
             whl_path = rctx.path(rctx.attr.filename)
         else:
             # It is an sdist and we need to tell PyPI to use a file in this directory
-            # and not use any indexes.
-            extra_pip_args.extend(["--no-index", "--find-links", "."])
+            # and, allow getting build dependencies from PYTHONPATH, which we
+            # setup in this repository rule, but still download any necessary
+            # build deps from PyPI (e.g. `flit_core`) if they are missing.
+            extra_pip_args.extend(["--no-build-isolation", "--find-links", "."])
 
     args = _parse_optional_attrs(rctx, args, extra_pip_args)
 
@@ -242,7 +244,10 @@ def _whl_library_impl(rctx):
 
         repo_utils.execute_checked(
             rctx,
-            op = op_tmpl.format(name = rctx.attr.name, requirement = rctx.attr.requirement),
+            # truncate the requirement value when logging it / reporting
+            # progress since it may contain several ' --hash=sha256:...
+            # --hash=sha256:...' substrings that fill up the console
+            op = op_tmpl.format(name = rctx.attr.name, requirement = rctx.attr.requirement.split(" ", 1)[0]),
             arguments = args,
             environment = environment,
             quiet = rctx.attr.quiet,
@@ -261,15 +266,16 @@ def _whl_library_impl(rctx):
             if whl_path.basename in patch_dst.whls:
                 patches[patch_file] = patch_dst.patch_strip
 
-        whl_path = patch_whl(
-            rctx,
-            op = "whl_library.PatchWhl({}, {})".format(rctx.attr.name, rctx.attr.requirement),
-            python_interpreter = python_interpreter,
-            whl_path = whl_path,
-            patches = patches,
-            quiet = rctx.attr.quiet,
-            timeout = rctx.attr.timeout,
-        )
+        if patches:
+            whl_path = patch_whl(
+                rctx,
+                op = "whl_library.PatchWhl({}, {})".format(rctx.attr.name, rctx.attr.requirement),
+                python_interpreter = python_interpreter,
+                whl_path = whl_path,
+                patches = patches,
+                quiet = rctx.attr.quiet,
+                timeout = rctx.attr.timeout,
+            )
 
     target_platforms = rctx.attr.experimental_target_platforms
     if target_platforms:

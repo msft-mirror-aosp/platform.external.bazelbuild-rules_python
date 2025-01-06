@@ -14,9 +14,9 @@
 
 "Implementation of py_wheel rule"
 
-load("//python/private:stamp.bzl", "is_stamping_enabled")
 load(":py_package.bzl", "py_package_lib")
 load(":py_wheel_normalize_pep440.bzl", "normalize_pep440")
+load(":stamp.bzl", "is_stamping_enabled")
 
 PyWheelInfo = provider(
     doc = "Information about a wheel produced by `py_wheel`",
@@ -33,6 +33,10 @@ _distribution_attrs = {
     "abi": attr.string(
         default = "none",
         doc = "Python ABI tag. 'none' for pure-Python wheels.",
+    ),
+    "compress": attr.bool(
+        default = True,
+        doc = "Enable compression of the final archive.",
     ),
     "distribution": attr.string(
         mandatory = True,
@@ -465,6 +469,9 @@ def _py_wheel_impl(ctx):
         description_file = ctx.file.description_file
         args.add("--description_file", description_file)
         other_inputs.append(description_file)
+
+    if not ctx.attr.compress:
+        args.add("--no_compress")
 
     for target, filename in ctx.attr.extra_distinfo_files.items():
         target_files = target.files.to_list()

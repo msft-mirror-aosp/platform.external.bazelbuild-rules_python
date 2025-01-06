@@ -22,16 +22,170 @@ A brief description of the categories of changes:
 
 ## Unreleased
 
-[x.x.x]: https://github.com/bazelbuild/rules_python/releases/tag/x.x.x
-
 ### Changed
-* Nothing yet
+- Nothing yet
+
+### Fixed
+- Nothing yet
 
 ### Added
-* Nothing yet
+- Nothing yet
 
 ### Removed
-* Nothing yet
+- Nothing yet
+
+## [0.37.0] - 2024-10-18
+
+[x.x.x]: https://github.com/bazelbuild/rules_python/releases/tag/0.37.0
+
+### Changed
+* **BREAKING** `py_library` no longer puts its source files or generated pyc
+  files in runfiles; it's the responsibility of consumers (e.g. binaries) to
+  populate runfiles with the necessary files. Adding source files to runfiles
+  can be temporarily restored by setting {obj}`--add_srcs_to_runfiles=enabled`,
+  but this flag will be removed in a subsequent releases.
+* {obj}`PyInfo.transitive_sources` is now added to runfiles. These files are
+  `.py` files that are required to be added to runfiles by downstream binaries
+  (or equivalent).
+* (toolchains) `py_runtime.implementation_name` now defaults to `cpython`
+  (previously it defaulted to None).
+* (toolchains) The exec tools toolchain is enabled by default. It can be
+  disabled by setting
+  {obj}`--@rules_python//python/config_settings:exec_tools_toolchain=disabled`.
+* (deps) stardoc 0.6.2 added as dependency.
+
+### Fixed
+* (bzlmod) The `python.override(minor_mapping)` now merges the default and the
+  overridden versions ensuring that the resultant `minor_mapping` will always
+  have all of the python versions.
+* (bzlmod) The default value for the {obj}`--python_version` flag will now be
+  always set to the default python toolchain version value.
+* (bzlmod) correctly wire the {attr}`pip.parse.extra_pip_args` all the
+  way to {obj}`whl_library`. What is more we will pass the `extra_pip_args` to
+  {obj}`whl_library` for `sdist` distributions when using
+  {attr}`pip.parse.experimental_index_url`. See
+  [#2239](https://github.com/bazelbuild/rules_python/issues/2239).
+* (whl_filegroup): Provide per default also the `RECORD` file
+* (py_wheel): `RECORD` file entry elements are now quoted if necessary when a
+  wheel is created
+* (whl_library) truncate progress messages from the repo rule to better handle
+  case where a requirement has many `--hash=sha256:...` flags
+* (rules) `compile_pip_requirements` passes `env` to the `X.update` target (and
+  not only to the `X_test` target, a bug introduced in
+  [#1067](https://github.com/bazelbuild/rules_python/pull/1067)).
+* (bzlmod) In hybrid bzlmod with WORKSPACE builds,
+  `python_register_toolchains(register_toolchains=True)` is respected
+  ([#1675](https://github.com/bazelbuild/rules_python/issues/1675)).
+* (precompiling) The {obj}`pyc_collection` attribute now correctly
+  enables (or disables) using pyc files from targets transitively
+* (pip) Skip patching wheels not matching `pip.override`'s `file`
+  ([#2294](https://github.com/bazelbuild/rules_python/pull/2294)).
+* (chore): Add a `rules_shell` dev dependency and moved a `sh_test` target
+  outside of the `//:BUILD.bazel` file.
+  Fixes [#2299](https://github.com/bazelbuild/rules_python/issues/2299).
+
+### Added
+* (py_wheel) Now supports `compress = (True|False)` to allow disabling
+  compression to speed up development.
+* (toolchains): A public `//python/config_settings:python_version_major_minor` has
+  been exposed for users to be able to match on the `X.Y` version of a Python
+  interpreter.
+* (api) Added {obj}`merge_py_infos()` so user rules can merge and propagate
+  `PyInfo` without losing information.
+* (toolchains) New Python versions available: 3.13.0 using the [20241008] release.
+* (toolchains): Bump default toolchain versions to:
+    * `3.8 -> 3.8.20`
+    * `3.9 -> 3.9.20`
+    * `3.10 -> 3.10.15`
+    * `3.11 -> 3.11.10`
+    * `3.12 -> 3.12.7`
+* (coverage) Add support for python 3.13 and bump `coverage.py` to 7.6.1.
+* (bzlmod) Add support for `download_only` flag to disable usage of `sdists`
+  when {bzl:attr}`pip.parse.experimental_index_url` is set.
+* (api) PyInfo fields: {obj}`PyInfo.transitive_implicit_pyc_files`,
+  {obj}`PyInfo.transitive_implicit_pyc_source_files`.
+
+[20241008]: https://github.com/indygreg/python-build-standalone/releases/tag/20241008
+
+### Removed
+* (precompiling) {obj}`--precompile_add_to_runfiles` has been removed.
+* (precompiling) {obj}`--pyc_collection` has been removed. The `pyc_collection`
+  attribute now bases its default on {obj}`--precompile`.
+* (precompiling) The {obj}`precompile=if_generated_source` value has been removed.
+* (precompiling) The {obj}`precompile_source_retention=omit_if_generated_source` value has been removed.
+
+## [0.36.0] - 2024-09-24
+
+[0.36.0]: https://github.com/bazelbuild/rules_python/releases/tag/0.36.0
+
+### Changed
+* (gazelle): Update error messages when unable to resolve a dependency to be more human-friendly.
+* (flags) The {obj}`--python_version` flag now also returns
+  {obj}`config_common.FeatureFlagInfo`.
+* (toolchain): The toolchain patches now expose the `patch_strip` attribute
+  that one should use when patching toolchains. Please set it if you are
+  patching python interpreter. In the next release the default will be set to
+  `0` which better reflects the defaults used in public `bazel` APIs.
+* (toolchains) When {obj}`py_runtime.interpreter_version_info` isn't specified,
+  the {obj}`--python_version` flag will determine the value. This allows
+  specifying the build-time Python version for the
+  {obj}`runtime_env_toolchains`.
+* (toolchains) {obj}`py_cc_toolchain.libs` and {obj}`PyCcToolchainInfo.libs` is
+  optional. This is to support situations where only the Python headers are
+  available.
+* (bazel) Minimum bazel 7 version that we test against has been bumped to `7.1`.
+
+### Fixed
+* (whl_library): Remove `--no-index` and add `--no-build-isolation` to the
+  `pip install` command when installing a wheel from a local file, which happens
+  when `experimental_index_url` flag is used.
+* (bzlmod) get the path to the host python interpreter in a way that results in
+  platform non-dependent hashes in the lock file when the requirement markers need
+  to be evaluated.
+* (bzlmod) correctly watch sources used for evaluating requirement markers for
+  any changes so that the repository rule or module extensions can be
+  re-evaluated when the said files change.
+* (gazelle): Fix incorrect use of `t.Fatal`/`t.Fatalf` in tests.
+* (toolchain) Omit third-party python packages from coverage reports from
+  stage2 bootstrap template.
+* (bzlmod) Properly handle relative path URLs in parse_simpleapi_html.bzl
+* (gazelle) Correctly resolve deps that have top-level module overlap with a gazelle_python.yaml dep module
+* (rules) Make `RUNFILES_MANIFEST_FILE`-based invocations work when used with
+  {obj}`--bootstrap_impl=script`. This fixes invocations using non-sandboxed
+  test execution with `--enable_runfiles=false --build_runfile_manifests=true`.
+  ([#2186](https://github.com/bazelbuild/rules_python/issues/2186)).
+* (py_wheel) Fix incorrectly generated `Required-Dist` when specifying requirements with markers
+  in extra_requires in py_wheel rule.
+* (rules) Prevent pytest from trying run the generated stage2
+  bootstrap .py file when using {obj}`--bootstrap_impl=script`
+* (toolchain) The {bzl:obj}`gen_python_config_settings` has been fixed to include
+  the flag_values from the platform definitions.
+
+### Added
+* (bzlmod): Toolchain overrides can now be done using the new
+  {bzl:obj}`python.override`, {bzl:obj}`python.single_version_override` and
+  {bzl:obj}`python.single_version_platform_override` tag classes.
+  See [#2081](https://github.com/bazelbuild/rules_python/issues/2081).
+* (rules) Executables provide {obj}`PyExecutableInfo`, which contains
+  executable-specific information useful for packaging an executable or
+  or deriving a new one from the original.
+* (py_wheel) Removed use of bash to avoid failures on Windows machines which do not
+  have it installed.
+* (docs) Automatically generated documentation for {bzl:obj}`python_register_toolchains`
+  and related symbols.
+* (toolchains) Added {attr}`python_repository.patch_strip` attribute for
+  allowing values that are other than `1`, which has been hard-coded up until
+  now. If you are relying on the undocumented `patches` support in
+  `TOOL_VERSIONS` for registering patched toolchains please consider setting
+  the `patch_strip` explicitly to `1` if you depend on this value - in the
+  future the value may change to default to `0`.
+* (toolchains) Added `//python:none`, a special target for use with
+  {obj}`py_exec_tools_toolchain.exec_interpreter` to treat the value as `None`.
+
+### Removed
+* (toolchains): Removed accidentally exposed `http_archive` symbol from
+  `python/repositories.bzl`.
+* (toolchains): An internal _is_python_config_setting_ macro has been removed.
 
 ## [0.35.0] - 2024-08-15
 
@@ -113,7 +267,6 @@ A brief description of the categories of changes:
 [py_test_main]: https://docs.aspect.build/rulesets/aspect_rules_py/docs/rules/#py_pytest_main
 [pytest_bazel]: https://pypi.org/project/pytest-bazel
 [20240726]: https://github.com/indygreg/python-build-standalone/releases/tag/20240726
-
 
 ## [0.34.0] - 2024-07-04
 
@@ -227,7 +380,7 @@ A brief description of the categories of changes:
   be automatically deleted correctly. For example, if `python_generation_mode`
   is set to package, when `__init__.py` is deleted, the `py_library` generated
   for this package before will be deleted automatically.
-* (whl_library): Use `is_python_config_setting` to correctly handle multi-python
+* (whl_library): Use _is_python_config_setting_ to correctly handle multi-python
   version dependency select statements when the `experimental_target_platforms`
   includes the Python ABI. The default python version case within the select is
   also now handled correctly, stabilizing the implementation.
@@ -745,8 +898,7 @@ Breaking changes:
 
 ### Added
 
-* (bzlmod, entry_point) Added
-  [`py_console_script_binary`](./docs/py_console_script_binary.md), which
+* (bzlmod, entry_point) Added {obj}`py_console_script_binary`, which
   allows adding custom dependencies to a package's entry points and customizing
   the `py_binary` rule used to build it.
 

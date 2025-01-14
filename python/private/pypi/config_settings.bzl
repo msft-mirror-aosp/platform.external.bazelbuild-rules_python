@@ -39,7 +39,8 @@ Note, that here the specialization of musl vs manylinux wheels is the same in
 order to ensure that the matching fails if the user requests for `musl` and we don't have it or vice versa.
 """
 
-load(":flags.bzl", "INTERNAL_FLAGS", "UniversalWhlFlag", "WhlLibcFlag")
+load("//python/private:flags.bzl", "LibcFlag")
+load(":flags.bzl", "INTERNAL_FLAGS", "UniversalWhlFlag")
 
 FLAGS = struct(
     **{
@@ -148,6 +149,13 @@ def config_settings(
             )
 
 def _dist_config_settings(*, suffix, plat_flag_values, **kwargs):
+    if kwargs.get("constraint_values"):
+        # Add python version + platform config settings
+        _dist_config_setting(
+            name = suffix.strip("_"),
+            **kwargs
+        )
+
     flag_values = {_flags.dist: ""}
 
     # First create an sdist, we will be building upon the flag values, which
@@ -244,14 +252,14 @@ def _plat_flag_values(os, cpu, osx_versions, glibc_versions, muslc_versions):
 
     elif os == "linux":
         for os_prefix, linux_libc in {
-            os: WhlLibcFlag.GLIBC,
-            "many" + os: WhlLibcFlag.GLIBC,
-            "musl" + os: WhlLibcFlag.MUSL,
+            os: LibcFlag.GLIBC,
+            "many" + os: LibcFlag.GLIBC,
+            "musl" + os: LibcFlag.MUSL,
         }.items():
-            if linux_libc == WhlLibcFlag.GLIBC:
+            if linux_libc == LibcFlag.GLIBC:
                 libc_versions = glibc_versions
                 libc_flag = FLAGS.pip_whl_glibc_version
-            elif linux_libc == WhlLibcFlag.MUSL:
+            elif linux_libc == LibcFlag.MUSL:
                 libc_versions = muslc_versions
                 libc_flag = FLAGS.pip_whl_muslc_version
             else:
@@ -277,7 +285,7 @@ def _plat_flag_values(os, cpu, osx_versions, glibc_versions, muslc_versions):
 
     return ret
 
-def _dist_config_setting(*, name, is_pip_whl, is_python, python_version, native = native, **kwargs):
+def _dist_config_setting(*, name, is_python, python_version, is_pip_whl = None, native = native, **kwargs):
     """A macro to create a target that matches is_pip_whl_auto and one more value.
 
     Args:
@@ -308,6 +316,10 @@ def _dist_config_setting(*, name, is_pip_whl, is_python, python_version, native 
     if python_version:
         # Reuse the config_setting targets that we use with the default
         # `python_version` setting.
+        return
+
+    if not is_pip_whl:
+        native.config_setting(name = _name, **kwargs)
         return
 
     config_setting_name = _name + "_setting"

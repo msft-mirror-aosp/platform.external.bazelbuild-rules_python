@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Dependencies that are needed for rules_python tests and tools."""
+"""Dependencies that are needed for development and testing of rules_python itself."""
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", _http_archive = "http_archive", _http_file = "http_file")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
@@ -32,17 +32,20 @@ def http_file(name, **kwargs):
     )
 
 def rules_python_internal_deps():
-    """Fetches all required dependencies for rules_python tests and tools."""
+    """Fetches all required dependencies for developing/testing rules_python itself.
 
-    # This version is also used in python/tests/toolchains/workspace_template/WORKSPACE.tmpl
-    # and tests/ignore_root_user_error/WORKSPACE.
-    # If you update this dependency, please update the tests as well.
+    Setup of these dependencies is done by `internal_dev_setup.bzl`
+
+    For dependencies needed by *users* of rules_python, see
+    python/private/py_repositories.bzl.
+    """
+
     http_archive(
         name = "bazel_skylib",
-        sha256 = "c6966ec828da198c5d9adbaa94c05e3a1c7f21bd012a0b29ba8ddbccb2c93b0d",
+        sha256 = "bc283cdfcd526a52c3201279cda4bc298652efa898b10b4db0837dc51652756f",
         urls = [
-            "https://github.com/bazelbuild/bazel-skylib/releases/download/1.1.1/bazel-skylib-1.1.1.tar.gz",
-            "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.1.1/bazel-skylib-1.1.1.tar.gz",
+            "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.7.1/bazel-skylib-1.7.1.tar.gz",
+            "https://github.com/bazelbuild/bazel-skylib/releases/download/1.7.1/bazel-skylib-1.7.1.tar.gz",
         ],
     )
 
@@ -181,21 +184,19 @@ def rules_python_internal_deps():
 
     http_archive(
         name = "com_google_protobuf",
-        sha256 = "616bb3536ac1fff3fb1a141450fa28b875e985712170ea7f1bfe5e5fc41e2cd8",
-        strip_prefix = "protobuf-24.4",
-        urls = [
-            "https://github.com/protocolbuffers/protobuf/releases/download/v24.4/protobuf-24.4.tar.gz",
-        ],
+        sha256 = "23082dca1ca73a1e9c6cbe40097b41e81f71f3b4d6201e36c134acc30a1b3660",
+        url = "https://github.com/protocolbuffers/protobuf/releases/download/v29.0-rc2/protobuf-29.0-rc2.zip",
+        strip_prefix = "protobuf-29.0-rc2",
     )
 
     # Needed for stardoc
     http_archive(
         name = "rules_java",
         urls = [
-            "https://mirror.bazel.build/github.com/bazelbuild/rules_java/releases/download/6.3.0/rules_java-6.3.0.tar.gz",
-            "https://github.com/bazelbuild/rules_java/releases/download/6.3.0/rules_java-6.3.0.tar.gz",
+            "https://mirror.bazel.build/github.com/bazelbuild/rules_java/releases/download/8.3.1/rules_java-8.3.1.tar.gz",
+            "https://github.com/bazelbuild/rules_java/releases/download/8.3.1/rules_java-8.3.1.tar.gz",
         ],
-        sha256 = "29ba147c583aaf5d211686029842c5278e12aaea86f66bd4a9eb5e525b7f2701",
+        sha256 = "ee786b943e00da4fea7c233e70e5f5b8a01cc69b9341b3f49169f174fe0df1c5",
     )
 
     RULES_JVM_EXTERNAL_TAG = "5.2"
@@ -227,7 +228,13 @@ def rules_python_internal_deps():
 
     http_archive(
         name = "rules_cc",
-        sha256 = "2037875b9a4456dce4a79d112a8ae885bbc4aad968e6587dca6e64f3a0900cdf",
-        strip_prefix = "rules_cc-0.0.9",
-        urls = ["https://github.com/bazelbuild/rules_cc/releases/download/0.0.9/rules_cc-0.0.9.tar.gz"],
+        urls = ["https://github.com/bazelbuild/rules_cc/releases/download/0.0.16/rules_cc-0.0.16.tar.gz"],
+        sha256 = "bbf1ae2f83305b7053b11e4467d317a7ba3517a12cef608543c1b1c5bf48a4df",
+        strip_prefix = "rules_cc-0.0.16",
+    )
+
+    http_archive(
+        name = "rules_multirun",
+        sha256 = "0e124567fa85287874eff33a791c3bbdcc5343329a56faa828ef624380d4607c",
+        url = "https://github.com/keith/rules_multirun/releases/download/0.9.0/rules_multirun.0.9.0.tar.gz",
     )

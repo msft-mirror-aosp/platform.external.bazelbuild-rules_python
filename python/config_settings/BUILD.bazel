@@ -5,6 +5,8 @@ load(
     "AddSrcsToRunfilesFlag",
     "BootstrapImplFlag",
     "ExecToolsToolchainFlag",
+    "FreeThreadedFlag",
+    "LibcFlag",
     "PrecompileFlag",
     "PrecompileSourceRetentionFlag",
 )
@@ -12,7 +14,6 @@ load(
     "//python/private/pypi:flags.bzl",
     "UniversalWhlFlag",
     "UseWhlFlag",
-    "WhlLibcFlag",
     "define_pypi_internal_flags",
 )
 load(":config_settings.bzl", "construct_config_settings")
@@ -86,9 +87,22 @@ string_flag(
 # This is used for pip and hermetic toolchain resolution.
 string_flag(
     name = "py_linux_libc",
-    build_setting_default = WhlLibcFlag.GLIBC,
-    values = sorted(WhlLibcFlag.__members__.values()),
+    build_setting_default = LibcFlag.GLIBC,
+    values = LibcFlag.flag_values(),
     # NOTE: Only public because it is used in pip hub and toolchain repos.
+    visibility = ["//visibility:public"],
+)
+
+string_flag(
+    name = "py_freethreaded",
+    build_setting_default = FreeThreadedFlag.NO,
+    values = sorted(FreeThreadedFlag.__members__.values()),
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "is_py_freethreaded",
+    flag_values = {":py_freethreaded": FreeThreadedFlag.YES},
     visibility = ["//visibility:public"],
 )
 

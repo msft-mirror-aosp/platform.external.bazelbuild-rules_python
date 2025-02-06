@@ -17,7 +17,7 @@ workspace(name = "rules_python")
 # Everything below this line is used only for developing rules_python. Users
 # should not copy it to their WORKSPACE.
 
-load("//:internal_deps.bzl", "rules_python_internal_deps")
+load("//:internal_dev_deps.bzl", "rules_python_internal_deps")
 
 rules_python_internal_deps()
 
@@ -37,7 +37,7 @@ load("@stardoc_maven//:defs.bzl", stardoc_pinned_maven_install = "pinned_maven_i
 
 stardoc_pinned_maven_install()
 
-load("//:internal_setup.bzl", "rules_python_internal_setup")
+load("//:internal_dev_setup.bzl", "rules_python_internal_setup")
 
 rules_python_internal_setup()
 
@@ -86,7 +86,7 @@ load("@rules_python_gazelle_plugin//:deps.bzl", _py_gazelle_deps = "gazelle_deps
 _py_gazelle_deps()
 
 # This interpreter is used for various rules_python dev-time tools
-load("@python//3.11.9:defs.bzl", "interpreter")
+interpreter = "@python_3_11_9_host//:python"
 
 #####################
 # Install twine for our own runfiles wheel publishing.
@@ -98,7 +98,7 @@ pip_parse(
     name = "rules_python_publish_deps",
     python_interpreter_target = interpreter,
     requirements_darwin = "//tools/publish:requirements_darwin.txt",
-    requirements_lock = "//tools/publish:requirements.txt",
+    requirements_lock = "//tools/publish:requirements_linux.txt",
     requirements_windows = "//tools/publish:requirements_windows.txt",
 )
 

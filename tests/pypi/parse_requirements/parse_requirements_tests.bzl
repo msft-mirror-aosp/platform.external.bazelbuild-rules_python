@@ -19,6 +19,10 @@ load("//python/private/pypi:parse_requirements.bzl", "parse_requirements", "sele
 
 def _mock_ctx():
     testdata = {
+        "requirements_different_package_version": """\
+foo==0.0.1+local --hash=sha256:deadbeef
+foo==0.0.1 --hash=sha256:deadb00f
+""",
         "requirements_direct": """\
 foo[extra] @ https://some-url
 """,
@@ -29,6 +33,16 @@ foo[extra]==0.0.1 --hash=sha256:deadbeef
 """,
         "requirements_linux": """\
 foo==0.0.3 --hash=sha256:deadbaaf
+""",
+        # download_only = True
+        "requirements_linux_download_only": """\
+--platform=manylinux_2_17_x86_64
+--python-version=39
+--implementation=cp
+--abi=cp39
+
+foo==0.0.1 --hash=sha256:deadbeef
+bar==0.0.1 --hash=sha256:deadb00f
 """,
         "requirements_lock": """\
 foo[extra]==0.0.1 --hash=sha256:deadbeef
@@ -43,6 +57,14 @@ foo[extra]==0.0.1 ;marker --hash=sha256:deadbeef
 bar==0.0.1 --hash=sha256:deadbeef
 """,
         "requirements_osx": """\
+foo==0.0.3 --hash=sha256:deadbaaf
+""",
+        "requirements_osx_download_only": """\
+--platform=macosx_10_9_arm64
+--python-version=39
+--implementation=cp
+--abi=cp39
+
 foo==0.0.3 --hash=sha256:deadbaaf
 """,
         "requirements_windows": """\
@@ -229,6 +251,66 @@ def _test_multi_os(env):
 
 _tests.append(_test_multi_os)
 
+def _test_multi_os_legacy(env):
+    got = parse_requirements(
+        ctx = _mock_ctx(),
+        requirements_by_platform = {
+            "requirements_linux_download_only": ["cp39_linux_x86_64"],
+            "requirements_osx_download_only": ["cp39_osx_aarch64"],
+        },
+    )
+
+    env.expect.that_dict(got).contains_exactly({
+        "bar": [
+            struct(
+                distribution = "bar",
+                extra_pip_args = ["--platform=manylinux_2_17_x86_64", "--python-version=39", "--implementation=cp", "--abi=cp39"],
+                is_exposed = False,
+                requirement_line = "bar==0.0.1 --hash=sha256:deadb00f",
+                sdist = None,
+                srcs = struct(
+                    requirement = "bar==0.0.1",
+                    shas = ["deadb00f"],
+                    version = "0.0.1",
+                ),
+                target_platforms = ["cp39_linux_x86_64"],
+                whls = [],
+            ),
+        ],
+        "foo": [
+            struct(
+                distribution = "foo",
+                extra_pip_args = ["--platform=manylinux_2_17_x86_64", "--python-version=39", "--implementation=cp", "--abi=cp39"],
+                is_exposed = True,
+                requirement_line = "foo==0.0.1 --hash=sha256:deadbeef",
+                sdist = None,
+                srcs = struct(
+                    requirement = "foo==0.0.1",
+                    shas = ["deadbeef"],
+                    version = "0.0.1",
+                ),
+                target_platforms = ["cp39_linux_x86_64"],
+                whls = [],
+            ),
+            struct(
+                distribution = "foo",
+                extra_pip_args = ["--platform=macosx_10_9_arm64", "--python-version=39", "--implementation=cp", "--abi=cp39"],
+                is_exposed = True,
+                requirement_line = "foo==0.0.3 --hash=sha256:deadbaaf",
+                sdist = None,
+                srcs = struct(
+                    requirement = "foo==0.0.3",
+                    shas = ["deadbaaf"],
+                    version = "0.0.3",
+                ),
+                target_platforms = ["cp39_osx_aarch64"],
+                whls = [],
+            ),
+        ],
+    })
+
+_tests.append(_test_multi_os_legacy)
+
 def _test_select_requirement_none_platform(env):
     got = select_requirement(
         [
@@ -303,6 +385,48 @@ def _test_env_marker_resolution(env):
     ).equals("0.0.1")
 
 _tests.append(_test_env_marker_resolution)
+
+def _test_different_package_version(env):
+    got = parse_requirements(
+        ctx = _mock_ctx(),
+        requirements_by_platform = {
+            "requirements_different_package_version": ["linux_x86_64"],
+        },
+    )
+    env.expect.that_dict(got).contains_exactly({
+        "foo": [
+            struct(
+                distribution = "foo",
+                extra_pip_args = [],
+                requirement_line = "foo==0.0.1 --hash=sha256:deadb00f",
+                srcs = struct(
+                    requirement = "foo==0.0.1",
+                    shas = ["deadb00f"],
+                    version = "0.0.1",
+                ),
+                target_platforms = ["linux_x86_64"],
+                whls = [],
+                sdist = None,
+                is_exposed = True,
+            ),
+            struct(
+                distribution = "foo",
+                extra_pip_args = [],
+                requirement_line = "foo==0.0.1+local --hash=sha256:deadbeef",
+                srcs = struct(
+                    requirement = "foo==0.0.1+local",
+                    shas = ["deadbeef"],
+                    version = "0.0.1+local",
+                ),
+                target_platforms = ["linux_x86_64"],
+                whls = [],
+                sdist = None,
+                is_exposed = True,
+            ),
+        ],
+    })
+
+_tests.append(_test_different_package_version)
 
 def parse_requirements_test_suite(name):
     """Create the test suite.

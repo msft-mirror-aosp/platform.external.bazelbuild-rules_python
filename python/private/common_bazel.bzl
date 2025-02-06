@@ -15,7 +15,8 @@
 
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-load("@rules_cc//cc:defs.bzl", "CcInfo", "cc_common")
+load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load(":attributes.bzl", "PrecompileAttr", "PrecompileInvalidationModeAttr", "PrecompileSourceRetentionAttr")
 load(":common.bzl", "is_bool")
 load(":flags.bzl", "PrecompileFlag")
@@ -165,10 +166,13 @@ def _precompile(ctx, src, *, use_pycache):
 
     stem = src.basename[:-(len(src.extension) + 1)]
     if use_pycache:
-        if not target_toolchain.pyc_tag:
-            # This is most likely because of a "runtime toolchain", i.e. the
-            # autodetecting toolchain, or some equivalent toolchain that can't
-            # assume to know the runtime Python version at build time.
+        if not hasattr(target_toolchain, "pyc_tag") or not target_toolchain.pyc_tag:
+            # This is likely one of two situations:
+            # 1. The pyc_tag attribute is missing because it's the Bazel-builtin
+            #    PyRuntimeInfo object.
+            # 2. It's a "runtime toolchain", i.e. the autodetecting toolchain,
+            #    or some equivalent toolchain that can't assume to know the
+            #    runtime Python version at build time.
             # Instead of failing, just don't generate any pyc.
             return None
         pyc_path = "__pycache__/{stem}.{tag}.pyc".format(
